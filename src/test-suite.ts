@@ -11,7 +11,11 @@
 
 process.env.ENABLE_SEED_DATA = "true";
 
-import { dbRepo } from "./db/repo";
+import { existsSync } from "fs";
+import { join } from "path";
+import { dbRepo, buildSessionSlotGroups, doSessionsOverlap, toLocalDateString, dayOfWeekFor } from "./db/repo";
+import { checkRequestedSlot } from "./lib/booking-rules";
+import { RUBY_HALL_SPECIALISTS, specialistSessionId } from "./db/specialists-catalog";
 import { hashPassword, verifyPassword } from "./lib/auth-crypto";
 import { loginSchema, registerPatientSchema, registerDoctorSchema } from "./lib/validators";
 
@@ -74,9 +78,10 @@ async function runTests() {
 
   // TEST 5: Double Booking Guard
   console.log("\n--- 5. Double-Booking Concurrency Guard ---");
-  let doctors = await dbRepo.getAllDoctors();
-  if (doctors.length === 0) {
-    await dbRepo.createDoctor({
+  // Use a dedicated doctor with no sessions so seeded catalog doctors never affect these tests.
+  const doctor =
+    (await dbRepo.getDoctorById("doc-test-1")) ??
+    (await dbRepo.createDoctor({
       id: "doc-test-1",
       userId: user1.id,
       firstName: "David",
@@ -86,10 +91,7 @@ async function runTests() {
       licenseNumber: "CARD-88219",
       experienceYears: 12,
       consultationFee: 1200,
-    });
-    doctors = await dbRepo.getAllDoctors();
-  }
-  const doctor = doctors[0];
+    }));
   const patient1Id = "pat-1";
   const patient2Id = "pat-2";
   const testDate = "2026-11-15";
@@ -357,6 +359,209 @@ async function runTests() {
   assert(noShowResult === true, "Doctor can mark patient consultation as NO_SHOW");
   const checkedNoShowAppt = await dbRepo.getAppointmentById(wavePat2.appointment!.id);
   assert(checkedNoShowAppt?.status === "NO_SHOW", "Appointment status successfully updated to NO_SHOW in database");
+
+  // TEST 17: Landing page specialists catalog integrity
+  console.log("\n--- 17. Landing Specialists Catalog ---");
+  assert(RUBY_HALL_SPECIALISTS.length === 8, "Catalog contains the 8 landing page doctors");
+  assert(
+    new Set(RUBY_HALL_SPECIALISTS.map((d) => d.email)).size === RUBY_HALL_SPECIALISTS.length &&
+      new Set(RUBY_HALL_SPECIALISTS.map((d) => d.id)).size === RUBY_HALL_SPECIALISTS.length,
+    "Catalog doctor ids and emails are unique"
+  );
+  assert(
+    RUBY_HALL_SPECIALISTS.every((d) => existsSync(join(process.cwd(), "public", d.profileImage))),
+    "Every catalog doctor photo exists in /public"
+  );
+  const catalogSessionsOverlap = RUBY_HALL_SPECIALISTS.some((d) =>
+    d.sessions.some((a, i) =>
+      d.sessions.some(
+        (b, j) => j > i && a.days.some((day) => b.days.includes(day)) && doSessionsOverlap({ startTime: a.start, endTime: a.end }, { startTime: b.start, endTime: b.end })
+      )
+    )
+  );
+  assert(!catalogSessionsOverlap, "No catalog doctor has overlapping sessions on the same day");
+  const catalogSessionIds = RUBY_HALL_SPECIALISTS.flatMap((d) =>
+    d.sessions.flatMap((s) => s.days.map((day) => specialistSessionId(d.id, s.key, day)))
+  );
+  assert(new Set(catalogSessionIds).size === catalogSessionIds.length, "Seeded session ids are unique (re-seeding updates, never duplicates)");
+
+  // TEST 18: Shared slot engine & next-open-slot lookup used by the landing page
+  console.log("\n--- 18. Landing Availability (Next Open Slot) ---");
+  const fridaySession = {
+    id: "sess-test-fri",
+    doctorId: "doc-test-slots",
+    name: "Morning OPD",
+    dayOfWeek: "FRI" as const,
+    startTime: "09:00",
+    endTime: "10:00",
+    slotDurationMinutes: 30,
+    isActive: true,
+    schedulingType: "STREAM" as const,
+    patientsPerWave: 1,
+  };
+  const friday = "2030-01-04"; // a Friday, far enough ahead to never be "today"
+  const freshGroups = buildSessionSlotGroups([fridaySession], [], friday);
+  assert(
+    freshGroups.length === 1 && freshGroups[0].slots.map((s) => s.startTime).join(",") === "09:00,09:30",
+    "Stream session expands into 30-min slots 09:00 and 09:30"
+  );
+  const partlyBooked = buildSessionSlotGroups([fridaySession], [{ startTime: "09:00" }], friday);
+  assert(
+    partlyBooked[0].slots[0].isBooked && !partlyBooked[0].slots[1].isBooked,
+    "Booked stream slot is marked full, the next one stays open"
+  );
+  assert(buildSessionSlotGroups([fridaySession], [], "2030-01-05").length === 0, "No groups on a day without a session");
+  const waveGroups = buildSessionSlotGroups(
+    [{ ...fridaySession, schedulingType: "WAVE", patientsPerWave: 3 }],
+    [{ startTime: "09:00" }, { startTime: "09:00" }],
+    friday
+  );
+  assert(waveGroups[0].slots[0].seatsLeft === 1 && !waveGroups[0].slots[0].isBooked, "Wave slot with 2 of 3 seats taken still has 1 seat");
+
+  const windowStart = new Date();
+  const windowDates = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(windowStart);
+    d.setDate(windowStart.getDate() + i);
+    return toLocalDateString(d);
+  });
+  const catalogIds = RUBY_HALL_SPECIALISTS.map((d) => d.id);
+  const nextOpen = await dbRepo.getNextOpenSlots(catalogIds, windowDates);
+  assert(nextOpen.size > 0, "Seeded catalog doctors have open slots within the next 7 days");
+  const firstOpen = nextOpen.values().next().value;
+  assert(
+    Boolean(firstOpen && windowDates.includes(firstOpen.date) && /^\d{2}:\d{2}$/.test(firstOpen.startTime)),
+    "Next open slot has a date inside the window and an HH:mm time"
+  );
+  const noDoctors = await dbRepo.getNextOpenSlots([], windowDates);
+  assert(noDoctors.size === 0, "Next open slot lookup with no doctors returns nothing (no query)");
+
+  // Dates relative to today so the 30-day window and "not in the past" rules always hold.
+  const daysFromToday = (n: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return toLocalDateString(d);
+  };
+  const nextWeekday = (code: string) => {
+    for (let i = 2; i < 10; i++) {
+      const date = daysFromToday(i);
+      if (dayOfWeekFor(date) === code) return date;
+    }
+    throw new Error(`no ${code} in range`);
+  };
+
+  // TEST 19: Shared slot rules (used by both booking and rescheduling)
+  console.log("\n--- 19. Slot Rules for Booking & Rescheduling ---");
+  const ananya = "doc_ananya_sharma"; // MON–SAT 09:00–13:00 stream (15 min); MON/WED/FRI 17:00–20:00 wave (30 min)
+  const wednesday = nextWeekday("WED");
+  const sunday = nextWeekday("SUN");
+  const rejected = async (date: string, time: string, doctorId = ananya) => !(await checkRequestedSlot(doctorId, date, time)).ok;
+  assert(await rejected(sunday, "03:17"), "Sunday 03:17 (no session) is rejected");
+  assert(await rejected(wednesday, "09:07"), "Misaligned time 09:07 in a 15-min session is rejected");
+  assert(await rejected(wednesday, "13:00"), "13:00, when the morning session has closed, is rejected");
+  assert(await rejected(wednesday, "25:00"), "Invalid time 25:00 is rejected");
+  assert(await rejected(daysFromToday(-1), "09:00"), "A date in the past is rejected");
+  assert(await rejected(daysFromToday(40), "09:00"), "A date more than 30 days ahead is rejected");
+  assert(await rejected(wednesday, "09:00", "doc-does-not-exist"), "An unknown doctor is rejected");
+  const morningOk = await checkRequestedSlot(ananya, wednesday, "09:15");
+  assert(
+    morningOk.ok && morningOk.endTime === "09:30" && morningOk.session.name === "Morning OPD",
+    "Valid 09:15 slot passes with server-computed end 09:30 in the Morning OPD"
+  );
+  const eveningOk = await checkRequestedSlot(ananya, wednesday, "17:30");
+  assert(
+    eveningOk.ok && eveningOk.endTime === "18:00" && eveningOk.session.schedulingType === "WAVE",
+    "Valid 17:30 wave slot passes with end 18:00 in the evening wave session"
+  );
+
+  // TEST 20: Token numbers are never reused after a cancellation
+  console.log("\n--- 20. Unique Token Numbers ---");
+  const tokenDate = nextWeekday("THU");
+  const tokenSessionId = specialistSessionId(ananya, "morning", "THU");
+  const bookAt = (patientId: string, time: string) =>
+    dbRepo.createAppointment({
+      patientId,
+      doctorId: ananya,
+      sessionId: tokenSessionId,
+      appointmentDate: tokenDate,
+      startTime: time,
+      endTime: time,
+      reason: "Token test",
+    });
+  const t1 = await bookAt("pat-token-1", "09:00");
+  const t2 = await bookAt("pat-token-2", "09:15");
+  const t3 = await bookAt("pat-token-3", "09:30");
+  await dbRepo.updateAppointmentStatus(t2.appointment!.id, "CANCELLED");
+  const t4 = await bookAt("pat-token-4", "09:45");
+  const issuedTokens = [t1, t3, t4].map((r) => r.appointment!.tokenNumber);
+  assert(
+    issuedTokens.join(",") === "1,3,4",
+    `After cancelling token #2, the next booking gets #4, not a repeat of #3 (got ${issuedTokens.join(",")})`
+  );
+
+  // TEST 21: Doctors can only change their own sessions
+  console.log("\n--- 21. Session Ownership ---");
+  const rohanSessionId = specialistSessionId("doc_rohan_mehta", "morning", "MON");
+  let crossEditBlocked = false;
+  try {
+    await dbRepo.updateAvailabilitySession(ananya, rohanSessionId, { startTime: "06:00" });
+  } catch {
+    crossEditBlocked = true;
+  }
+  assert(crossEditBlocked, "Dr. Sharma cannot edit Dr. Mehta's session (treated as not found)");
+  const rohanSessionAfter = (await dbRepo.getAvailabilitiesByDoctorId("doc_rohan_mehta")).find((s) => s.id === rohanSessionId);
+  assert(rohanSessionAfter?.startTime === "10:00", "Dr. Mehta's session is unchanged after the attempt");
+  assert(
+    (await dbRepo.deleteAvailabilitySession(ananya, rohanSessionId)) === false,
+    "Dr. Sharma cannot delete Dr. Mehta's session"
+  );
+  let deleteWithBookingsBlocked = false;
+  try {
+    await dbRepo.deleteAvailabilitySession(ananya, tokenSessionId);
+  } catch {
+    deleteWithBookingsBlocked = true;
+  }
+  assert(deleteWithBookingsBlocked, "A session with upcoming bookings cannot be deleted (no orphaned appointments)");
+  const ownEdit = await dbRepo.updateAvailabilitySession(ananya, specialistSessionId(ananya, "morning", "SAT"), {
+    endTime: "12:00",
+  });
+  assert(ownEdit.endTime === "12:00", "A doctor can still edit their own session");
+
+  // TEST 22: Rescheduling respects capacity and authorization
+  console.log("\n--- 22. Reschedule Capacity & Authorization ---");
+  const ananyaUserId = "usr_doc_ananya_sharma";
+  const moveIntoFull = await dbRepo.rescheduleAppointment({
+    appointmentId: t1.appointment!.id,
+    newDate: tokenDate,
+    newStartTime: "09:30", // held by t3 in a stream session
+    newEndTime: "09:45",
+    newSessionId: tokenSessionId,
+    actorUserId: ananyaUserId,
+    actorRole: "DOCTOR",
+  });
+  assert(moveIntoFull.success === false, "Rescheduling into an already-booked stream slot is rejected");
+  const moveByOtherDoctor = await dbRepo.rescheduleAppointment({
+    appointmentId: t1.appointment!.id,
+    newDate: tokenDate,
+    newStartTime: "10:00",
+    newEndTime: "10:15",
+    newSessionId: tokenSessionId,
+    actorUserId: "usr_doc_rohan_mehta",
+    actorRole: "DOCTOR",
+  });
+  assert(moveByOtherDoctor.success === false, "Another doctor cannot reschedule Dr. Sharma's appointment");
+  const moveOk = await dbRepo.rescheduleAppointment({
+    appointmentId: t1.appointment!.id,
+    newDate: tokenDate,
+    newStartTime: "10:00",
+    newEndTime: "10:15",
+    newSessionId: tokenSessionId,
+    actorUserId: ananyaUserId,
+    actorRole: "DOCTOR",
+  });
+  assert(
+    moveOk.success === true && moveOk.appointment?.tokenNumber === 5,
+    `The assigned doctor can reschedule into a free slot and gets the next unused token (got #${moveOk.appointment?.tokenNumber})`
+  );
 
   console.log(`\n========================================`);
   console.log(`Test Results: ${passed} passed, ${failed} failed`);

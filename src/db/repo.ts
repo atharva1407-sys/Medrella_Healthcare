@@ -1,9 +1,10 @@
-import { eq, and, desc, sql, gte } from "drizzle-orm";
+import { eq, and, desc, sql, gte, inArray } from "drizzle-orm";
 import crypto from "crypto";
 import { db, isPostgresConfigured, assertProductionDatabase } from "./index";
 import * as schema from "./schema";
 import { hashPassword } from "@/lib/auth-crypto";
-import { RUBY_HALL_SPECIALISTS } from "./specialists-catalog";
+import { RUBY_HALL_SPECIALISTS, specialistSessionId, getSeedDoctorPassword } from "./specialists-catalog";
+import { seedSpecialists } from "./seed-specialists";
 
 export interface UserEntity {
   id: string;
@@ -36,6 +37,7 @@ export interface DoctorEntity {
   experienceYears: number;
   consultationFee: number;
   bio?: string | null;
+  profileImage?: string | null;
 }
 
 export interface AvailabilityEntity {
@@ -106,6 +108,142 @@ export function doSessionsOverlap(
   return s1.startTime < s2.endTime && s2.startTime < s1.endTime;
 }
 
+const DAY_CODES: Array<AvailabilityEntity["dayOfWeek"]> = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/** YYYY-MM-DD in local time (never UTC, so early-morning IST dates don't shift a day). */
+export function toLocalDateString(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+export function dayOfWeekFor(dateString: string): AvailabilityEntity["dayOfWeek"] {
+  return DAY_CODES[new Date(dateString + "T00:00:00").getDay()];
+}
+
+/**
+ * Pure slot engine shared by the booking page and the landing page: expands each active session
+ * for the date into stream slots or wave seats, marking full, past and too-soon (<15 min) slots.
+ */
+export function buildSessionSlotGroups(
+  sessions: AvailabilityEntity[],
+  activeAppointments: Pick<AppointmentEntity, "startTime">[],
+  dateString: string,
+  now: Date = new Date()
+): SessionSlotGroup[] {
+  const targetDay = dayOfWeekFor(dateString);
+  const activeSessions = sessions.filter((s) => s.dayOfWeek === targetDay && s.isActive);
+  const isToday = dateString === toLocalDateString(now);
+  const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const groups: SessionSlotGroup[] = [];
+
+  for (const session of activeSessions) {
+    const { startTime, endTime, slotDurationMinutes, schedulingType, patientsPerWave } = session;
+    const capacity = schedulingType === "WAVE" ? Math.max(1, patientsPerWave) : 1;
+
+    const [startH, startM] = startTime.split(":").map(Number);
+    const [endH, endM] = endTime.split(":").map(Number);
+    const startMinutes = startH * 60 + startM;
+    const endMinutes = endH * 60 + endM;
+
+    const slots: ComputedSlot[] = [];
+
+    for (let current = startMinutes; current + slotDurationMinutes <= endMinutes; current += slotDurationMinutes) {
+      const slotStartH = Math.floor(current / 60).toString().padStart(2, "0");
+      const slotStartM = (current % 60).toString().padStart(2, "0");
+      const slotStart = `${slotStartH}:${slotStartM}`;
+
+      const slotEndTotal = current + slotDurationMinutes;
+      const slotEndH = Math.floor(slotEndTotal / 60).toString().padStart(2, "0");
+      const slotEndM = (slotEndTotal % 60).toString().padStart(2, "0");
+      const slotEnd = `${slotEndH}:${slotEndM}`;
+
+      const bookedCount = activeAppointments.filter((a) => a.startTime === slotStart).length;
+      const seatsLeft = Math.max(0, capacity - bookedCount);
+
+      // Disallow slots in past or within 15 mins for today
+      const isPastOrTooSoon = isToday && current < currentTotalMinutes + 15;
+      const isBooked = seatsLeft <= 0 || isPastOrTooSoon;
+
+      slots.push({
+        sessionId: session.id,
+        sessionName: session.name,
+        schedulingType: session.schedulingType,
+        startTime: slotStart,
+        endTime: slotEnd,
+        capacity,
+        bookedCount,
+        seatsLeft: isPastOrTooSoon ? 0 : seatsLeft,
+        isBooked,
+      });
+    }
+
+    groups.push({
+      sessionId: session.id,
+      sessionName: session.name,
+      schedulingType: session.schedulingType,
+      patientsPerWave: capacity,
+      timeRange: `${startTime}–${endTime}`,
+      slots,
+    });
+  }
+
+  return groups;
+}
+
+export interface NextOpenSlot {
+  date: string; // YYYY-MM-DD
+  startTime: string; // HH:mm
+  sessionName: string;
+}
+
+type DbTransaction = Parameters<Parameters<NonNullable<typeof db>["transaction"]>[0]>[0];
+
+/**
+ * Serialises every booking change for one doctor on one date. Concurrent bookings or reschedules
+ * into that day wait here, so the seat count and token number they read can't go stale before
+ * their insert. The lock is released automatically when the transaction ends.
+ */
+async function lockDoctorDay(tx: DbTransaction, doctorId: string, date: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`appointments:${doctorId}:${date}`}))`);
+}
+
+/**
+ * Next token for a session (or the whole day when there is no session). Uses the highest token
+ * ever issued, cancelled ones included, so a cancellation never causes a token to be handed out twice.
+ */
+async function nextTokenNumber(tx: DbTransaction, doctorId: string, date: string, sessionId: string | null): Promise<number> {
+  const [row] = await tx
+    .select({ maxToken: sql<number>`coalesce(max(${schema.appointments.tokenNumber}), 0)` })
+    .from(schema.appointments)
+    .where(
+      and(
+        eq(schema.appointments.doctorId, doctorId),
+        eq(schema.appointments.appointmentDate, date),
+        sessionId ? eq(schema.appointments.sessionId, sessionId) : sql`true`
+      )
+    );
+  return Number(row?.maxToken ?? 0) + 1;
+}
+
+function nextMemoryToken(
+  appointments: AppointmentEntity[],
+  doctorId: string,
+  date: string,
+  sessionId: string | null,
+  excludeId?: string
+): number {
+  const tokens = appointments
+    .filter(
+      (a) =>
+        a.id !== excludeId &&
+        a.doctorId === doctorId &&
+        a.appointmentDate === date &&
+        (!sessionId || a.sessionId === sessionId)
+    )
+    .map((a) => a.tokenNumber);
+  return (tokens.length ? Math.max(...tokens) : 0) + 1;
+}
+
 /**
  * Production Database Repository for Medrella Healthcare.
  */
@@ -136,7 +274,7 @@ class MedrellaRepository {
     this.memAppointments = [];
     this.memDoctorLeaves = [];
 
-    const defaultPasswordHash = hashPassword("password123");
+    const defaultPasswordHash = hashPassword(getSeedDoctorPassword({ allowDevFallback: true }));
 
     RUBY_HALL_SPECIALISTS.forEach((d) => {
       this.memUsers.push({
@@ -159,22 +297,25 @@ class MedrellaRepository {
         experienceYears: d.experienceYears,
         consultationFee: d.consultationFee,
         bio: d.bio,
+        profileImage: d.profileImage,
       });
 
-      d.days.forEach((day) => {
-        this.memAvailabilities.push({
-          id: `avail-${d.id}-${day}-morning`,
-          doctorId: d.id,
-          name: "Morning OPD",
-          dayOfWeek: day,
-          startTime: d.start,
-          endTime: d.end,
-          slotDurationMinutes: d.duration,
-          isActive: true,
-          schedulingType: "STREAM",
-          patientsPerWave: 1,
-        });
-      });
+      for (const session of d.sessions) {
+        for (const day of session.days) {
+          this.memAvailabilities.push({
+            id: specialistSessionId(d.id, session.key, day),
+            doctorId: d.id,
+            name: session.name,
+            dayOfWeek: day,
+            startTime: session.start,
+            endTime: session.end,
+            slotDurationMinutes: session.duration,
+            isActive: true,
+            schedulingType: session.schedulingType,
+            patientsPerWave: session.patientsPerWave,
+          });
+        }
+      }
     });
   }
 
@@ -346,6 +487,7 @@ class MedrellaRepository {
         experienceYears: doctor.experienceYears,
         consultationFee: doctor.consultationFee,
         bio: doctor.bio ?? null,
+        profileImage: doctor.profileImage ?? null,
       });
       return doctor;
     }
@@ -433,19 +575,26 @@ class MedrellaRepository {
     return session;
   }
 
+  /** Only the owning doctor's session is found; another doctor's id behaves exactly like a missing one. */
+  private async findOwnedSession(doctorId: string, id: string): Promise<AvailabilityEntity | undefined> {
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.availabilities)
+        .where(and(eq(schema.availabilities.id, id), eq(schema.availabilities.doctorId, doctorId)))
+        .limit(1);
+      return rows[0] as AvailabilityEntity | undefined;
+    }
+    return this.memAvailabilities.find((a) => a.id === id && a.doctorId === doctorId);
+  }
+
   public async updateAvailabilitySession(
+    doctorId: string,
     id: string,
     updates: Partial<Omit<AvailabilityEntity, "id" | "doctorId">>
   ): Promise<AvailabilityEntity> {
     this.checkProductionDatabase();
-    let current: AvailabilityEntity | undefined;
-
-    if (db) {
-      const rows = await db.select().from(schema.availabilities).where(eq(schema.availabilities.id, id)).limit(1);
-      if (rows[0]) current = rows[0] as AvailabilityEntity;
-    } else {
-      current = this.memAvailabilities.find((a) => a.id === id);
-    }
+    const current = await this.findOwnedSession(doctorId, id);
 
     if (!current) {
       throw new Error("Availability session not found.");
@@ -495,7 +644,7 @@ class MedrellaRepository {
           schedulingType: updated.schedulingType,
           patientsPerWave: updated.patientsPerWave,
         })
-        .where(eq(schema.availabilities.id, id));
+        .where(and(eq(schema.availabilities.id, id), eq(schema.availabilities.doctorId, doctorId)));
       return updated;
     }
 
@@ -503,13 +652,48 @@ class MedrellaRepository {
     return updated;
   }
 
-  public async deleteAvailabilitySession(id: string): Promise<boolean> {
+  /**
+   * Deletes one of the doctor's own sessions. Refuses while patients still hold upcoming
+   * bookings in it, so no appointment is left pointing at a session that no longer exists.
+   */
+  public async deleteAvailabilitySession(doctorId: string, id: string): Promise<boolean> {
     this.checkProductionDatabase();
+    const session = await this.findOwnedSession(doctorId, id);
+    if (!session) return false;
+
+    const today = toLocalDateString(new Date());
+    let upcomingBookings: number;
     if (db) {
-      const res = await db.delete(schema.availabilities).where(eq(schema.availabilities.id, id));
+      const rows = await db
+        .select({ id: schema.appointments.id })
+        .from(schema.appointments)
+        .where(
+          and(
+            eq(schema.appointments.sessionId, id),
+            eq(schema.appointments.status, "BOOKED"),
+            gte(schema.appointments.appointmentDate, today)
+          )
+        )
+        .limit(1);
+      upcomingBookings = rows.length;
+    } else {
+      upcomingBookings = this.memAppointments.filter(
+        (a) => a.sessionId === id && a.status === "BOOKED" && a.appointmentDate >= today
+      ).length;
+    }
+    if (upcomingBookings > 0) {
+      throw new Error(
+        "This session still has upcoming booked appointments. Reschedule or cancel them before deleting the session, or switch the session off instead."
+      );
+    }
+
+    if (db) {
+      const res = await db
+        .delete(schema.availabilities)
+        .where(and(eq(schema.availabilities.id, id), eq(schema.availabilities.doctorId, doctorId)));
       return (res.rowCount ?? 1) > 0;
     }
-    const idx = this.memAvailabilities.findIndex((a) => a.id === id);
+    const idx = this.memAvailabilities.findIndex((a) => a.id === id && a.doctorId === doctorId);
     if (idx !== -1) {
       this.memAvailabilities.splice(idx, 1);
       return true;
@@ -524,7 +708,7 @@ class MedrellaRepository {
   ): Promise<AvailabilityEntity> {
     const existing = (await this.getAvailabilitiesByDoctorId(doctorId)).find((s) => s.dayOfWeek === dayOfWeek);
     if (existing) {
-      return await this.updateAvailabilitySession(existing.id, updates);
+      return await this.updateAvailabilitySession(doctorId, existing.id, updates);
     }
     return await this.createAvailabilitySession({
       doctorId,
@@ -628,17 +812,9 @@ class MedrellaRepository {
       return { isLeave: true, leaveReason: leave?.reason || "Doctor on approved clinical leave", groups: [] };
     }
 
-    const date = new Date(dateString + "T00:00:00");
-    const dayIndex = date.getDay();
-    const dayMap: Array<"SUN" | "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT"> = [
-      "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
-    ];
-    const targetDay = dayMap[dayIndex];
-
     const allSessions = await this.getAvailabilitiesByDoctorId(doctorId);
-    const activeSessions = allSessions.filter((s) => s.dayOfWeek === targetDay && s.isActive);
-
-    if (activeSessions.length === 0) {
+    const targetDay = dayOfWeekFor(dateString);
+    if (!allSessions.some((s) => s.dayOfWeek === targetDay && s.isActive)) {
       return { isLeave: false, groups: [] };
     }
 
@@ -662,67 +838,74 @@ class MedrellaRepository {
       );
     }
 
-    // Booking Notice Enforcement (e.g. at least 2 hours notice required for today's slots)
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const isToday = dateString === todayStr;
-    const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
+    return { isLeave: false, groups: buildSessionSlotGroups(allSessions, activeAppointments, dateString) };
+  }
 
-    const groups: SessionSlotGroup[] = [];
+  /**
+   * First bookable slot per doctor across the given dates, using three queries in total
+   * (sessions, leaves, appointments) instead of one slot computation per doctor per day.
+   * Doctors with nothing open in the window are absent from the returned map.
+   */
+  public async getNextOpenSlots(doctorIds: string[], dates: string[]): Promise<Map<string, NextOpenSlot>> {
+    this.checkProductionDatabase();
+    const result = new Map<string, NextOpenSlot>();
+    if (doctorIds.length === 0 || dates.length === 0) return result;
 
-    for (const session of activeSessions) {
-      const { startTime, endTime, slotDurationMinutes, schedulingType, patientsPerWave } = session;
-      const capacity = schedulingType === "WAVE" ? Math.max(1, patientsPerWave) : 1;
+    let sessions: AvailabilityEntity[];
+    let leaves: { doctorId: string; leaveDate: string }[];
+    let appointments: Pick<AppointmentEntity, "doctorId" | "appointmentDate" | "startTime">[];
 
-      const [startH, startM] = startTime.split(":").map(Number);
-      const [endH, endM] = endTime.split(":").map(Number);
-      const startMinutes = startH * 60 + startM;
-      const endMinutes = endH * 60 + endM;
-
-      const slots: ComputedSlot[] = [];
-
-      for (let current = startMinutes; current + slotDurationMinutes <= endMinutes; current += slotDurationMinutes) {
-        const slotStartH = Math.floor(current / 60).toString().padStart(2, "0");
-        const slotStartM = (current % 60).toString().padStart(2, "0");
-        const slotStart = `${slotStartH}:${slotStartM}`;
-
-        const slotEndTotal = current + slotDurationMinutes;
-        const slotEndH = Math.floor(slotEndTotal / 60).toString().padStart(2, "0");
-        const slotEndM = (slotEndTotal % 60).toString().padStart(2, "0");
-        const slotEnd = `${slotEndH}:${slotEndM}`;
-
-        const bookedForSlot = activeAppointments.filter((a) => a.startTime === slotStart);
-        const bookedCount = bookedForSlot.length;
-        const seatsLeft = Math.max(0, capacity - bookedCount);
-
-        // Disallow slots in past or within 15 mins for today
-        const isPastOrTooSoon = isToday && current < currentTotalMinutes + 15;
-        const isBooked = seatsLeft <= 0 || isPastOrTooSoon;
-
-        slots.push({
-          sessionId: session.id,
-          sessionName: session.name,
-          schedulingType: session.schedulingType,
-          startTime: slotStart,
-          endTime: slotEnd,
-          capacity,
-          bookedCount,
-          seatsLeft: isPastOrTooSoon ? 0 : seatsLeft,
-          isBooked,
-        });
-      }
-
-      groups.push({
-        sessionId: session.id,
-        sessionName: session.name,
-        schedulingType: session.schedulingType,
-        patientsPerWave: capacity,
-        timeRange: `${startTime}–${endTime}`,
-        slots,
-      });
+    if (db) {
+      const [sessionRows, leaveRows, appointmentRows] = await Promise.all([
+        db.select().from(schema.availabilities).where(inArray(schema.availabilities.doctorId, doctorIds)),
+        db
+          .select({ doctorId: schema.doctorLeaves.doctorId, leaveDate: schema.doctorLeaves.leaveDate })
+          .from(schema.doctorLeaves)
+          .where(and(inArray(schema.doctorLeaves.doctorId, doctorIds), inArray(schema.doctorLeaves.leaveDate, dates))),
+        db
+          .select({
+            doctorId: schema.appointments.doctorId,
+            appointmentDate: schema.appointments.appointmentDate,
+            startTime: schema.appointments.startTime,
+          })
+          .from(schema.appointments)
+          .where(
+            and(
+              inArray(schema.appointments.doctorId, doctorIds),
+              inArray(schema.appointments.appointmentDate, dates),
+              sql`${schema.appointments.status} != 'CANCELLED'`
+            )
+          ),
+      ]);
+      sessions = sessionRows as AvailabilityEntity[];
+      leaves = leaveRows;
+      appointments = appointmentRows;
+    } else {
+      sessions = this.memAvailabilities.filter((s) => doctorIds.includes(s.doctorId));
+      leaves = this.memDoctorLeaves.filter((l) => doctorIds.includes(l.doctorId) && dates.includes(l.leaveDate));
+      appointments = this.memAppointments.filter(
+        (a) => doctorIds.includes(a.doctorId) && dates.includes(a.appointmentDate) && a.status !== "CANCELLED"
+      );
     }
 
-    return { isLeave: false, groups };
+    const now = new Date();
+    for (const doctorId of doctorIds) {
+      const doctorSessions = sessions.filter((s) => s.doctorId === doctorId);
+      for (const date of dates) {
+        if (leaves.some((l) => l.doctorId === doctorId && l.leaveDate === date)) continue;
+        const dayAppointments = appointments.filter((a) => a.doctorId === doctorId && a.appointmentDate === date);
+        const open = buildSessionSlotGroups(doctorSessions, dayAppointments, date, now)
+          .flatMap((g) => g.slots)
+          .filter((slot) => !slot.isBooked)
+          .sort((a, b) => a.startTime.localeCompare(b.startTime))[0];
+        if (open) {
+          result.set(doctorId, { date, startTime: open.startTime, sessionName: open.sessionName });
+          break;
+        }
+      }
+    }
+
+    return result;
   }
 
   // --- Legacy helper for backwards compatibility ---
@@ -768,6 +951,8 @@ class MedrellaRepository {
 
     if (db) {
       return await db.transaction(async (tx) => {
+        await lockDoctorDay(tx, data.doctorId, data.appointmentDate);
+
         // 1. Verify doctor leave
         const leaveRows = await tx
           .select()
@@ -838,19 +1023,8 @@ class MedrellaRepository {
           };
         }
 
-        // 4. Calculate Token Number for this session / date
-        const dayBookings = await tx
-          .select()
-          .from(schema.appointments)
-          .where(
-            and(
-              eq(schema.appointments.doctorId, data.doctorId),
-              eq(schema.appointments.appointmentDate, data.appointmentDate),
-              sessionId ? eq(schema.appointments.sessionId, sessionId) : sql`1=1`,
-              sql`${schema.appointments.status} != 'CANCELLED'`
-            )
-          );
-        const tokenNumber = dayBookings.length + 1;
+        // 4. Token number for this session / date (max issued + 1, never reused)
+        const tokenNumber = await nextTokenNumber(tx, data.doctorId, data.appointmentDate, sessionId);
 
         // 5. Insert appointment
         const [inserted] = await tx
@@ -905,13 +1079,7 @@ class MedrellaRepository {
       };
     }
 
-    const dayBookings = this.memAppointments.filter(
-      (a) =>
-        a.doctorId === data.doctorId &&
-        a.appointmentDate === data.appointmentDate &&
-        a.status !== "CANCELLED"
-    );
-    const tokenNumber = dayBookings.length + 1;
+    const tokenNumber = nextMemoryToken(this.memAppointments, data.doctorId, data.appointmentDate, sessionId);
 
     const newAppointment: AppointmentEntity = {
       ...data,
@@ -957,6 +1125,8 @@ class MedrellaRepository {
             message: `Only active booked appointments can be rescheduled. Current status is ${appt.status}.`,
           };
         }
+
+        await lockDoctorDay(tx, appt.doctorId, data.newDate);
 
         // Authorization & cutoff checks
         if (data.actorRole === "PATIENT") {
@@ -1033,19 +1203,8 @@ class MedrellaRepository {
           };
         }
 
-        // Compute new token number for new date
-        const newDayBookings = await tx
-          .select()
-          .from(schema.appointments)
-          .where(
-            and(
-              eq(schema.appointments.doctorId, appt.doctorId),
-              eq(schema.appointments.appointmentDate, data.newDate),
-              sql`${schema.appointments.status} != 'CANCELLED'`,
-              sql`${schema.appointments.id} != ${appt.id}`
-            )
-          );
-        const newTokenNumber = newDayBookings.length + 1;
+        // Token in the new session / date (max issued + 1, never reused)
+        const newTokenNumber = await nextTokenNumber(tx, appt.doctorId, data.newDate, newSessionId);
 
         // Atomic slot move: frees old slot and claims new one in a single update
         const [updated] = await tx
@@ -1085,6 +1244,27 @@ class MedrellaRepository {
       if (apptDateTime.getTime() - Date.now() < 60 * 60 * 1000) {
         return { success: false, message: "Appointments can only be rescheduled at least 1 hour in advance." };
       }
+    } else {
+      const d = this.memDoctors.find((doc) => doc.userId === data.actorUserId);
+      if (!d || d.id !== appt.doctorId) return { success: false, message: "Unauthorized." };
+    }
+
+    if (this.memDoctorLeaves.some((l) => l.doctorId === appt.doctorId && l.leaveDate === data.newDate)) {
+      return { success: false, message: "Doctor is on leave on the selected date. Please choose another date." };
+    }
+
+    const memSession = data.newSessionId ? this.memAvailabilities.find((a) => a.id === data.newSessionId) : undefined;
+    const memCapacity = memSession?.schedulingType === "WAVE" ? Math.max(1, memSession.patientsPerWave) : 1;
+    const takenSeats = this.memAppointments.filter(
+      (a) =>
+        a.id !== appt.id &&
+        a.doctorId === appt.doctorId &&
+        a.appointmentDate === data.newDate &&
+        a.startTime === data.newStartTime &&
+        a.status !== "CANCELLED"
+    ).length;
+    if (takenSeats >= memCapacity) {
+      return { success: false, message: "The requested new slot is fully booked. Please select another time." };
     }
 
     appt.originalAppointmentDate = appt.originalAppointmentDate || appt.appointmentDate;
@@ -1094,7 +1274,7 @@ class MedrellaRepository {
     appt.startTime = data.newStartTime;
     appt.endTime = data.newEndTime;
     appt.sessionId = data.newSessionId || appt.sessionId;
-    appt.tokenNumber = this.memAppointments.filter((a) => a.doctorId === appt.doctorId && a.appointmentDate === data.newDate && a.status !== "CANCELLED").length + 1;
+    appt.tokenNumber = nextMemoryToken(this.memAppointments, appt.doctorId, data.newDate, appt.sessionId ?? null, appt.id);
     appt.rescheduledAt = new Date();
     appt.rescheduledBy = data.actorRole;
 
@@ -1199,53 +1379,7 @@ class MedrellaRepository {
 
   public async seed(): Promise<void> {
     if (db) {
-      const defaultPasswordHash = hashPassword("password123");
-      for (const d of RUBY_HALL_SPECIALISTS) {
-        await db
-          .insert(schema.users)
-          .values({
-            id: d.userId,
-            email: d.email.toLowerCase(),
-            passwordHash: defaultPasswordHash,
-            role: "DOCTOR",
-            isActive: true,
-          })
-          .onConflictDoNothing();
-
-        await db
-          .insert(schema.doctors)
-          .values({
-            id: d.id,
-            userId: d.userId,
-            firstName: d.firstName,
-            lastName: d.lastName,
-            specialization: d.specialization,
-            phone: d.phone,
-            licenseNumber: d.licenseNumber,
-            experienceYears: d.experienceYears,
-            consultationFee: d.consultationFee,
-            bio: d.bio,
-          })
-          .onConflictDoNothing();
-
-        for (const day of d.days) {
-          await db
-            .insert(schema.availabilities)
-            .values({
-              id: `avail-${d.id}-${day}-morning`,
-              doctorId: d.id,
-              name: "Morning OPD",
-              dayOfWeek: day,
-              startTime: d.start,
-              endTime: d.end,
-              slotDurationMinutes: d.duration,
-              isActive: true,
-              schedulingType: "STREAM",
-              patientsPerWave: 1,
-            })
-            .onConflictDoNothing();
-        }
-      }
+      await seedSpecialists(db, getSeedDoctorPassword({ allowDevFallback: false }));
       return;
     }
     this.seedMemory();
@@ -1399,4 +1533,14 @@ class MedrellaRepository {
   }
 }
 
-export const dbRepo = new MedrellaRepository();
+// In development, share one repository across route bundles and hot reloads; otherwise each compiled
+// route gets its own in-memory store and, for example, a patient who just signed up "doesn't exist" on the next page.
+declare global {
+  // eslint-disable-next-line no-var
+  var __medrellaRepository: MedrellaRepository | undefined;
+}
+
+export const dbRepo = globalThis.__medrellaRepository ?? new MedrellaRepository();
+if (process.env.NODE_ENV !== "production") {
+  globalThis.__medrellaRepository = dbRepo;
+}
