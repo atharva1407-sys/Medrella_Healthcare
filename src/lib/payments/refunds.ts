@@ -3,6 +3,7 @@ import type { MedrellaRepository, PaymentEntity, RefundEntity, RefundStatus } fr
 import { buildRefundIdempotencyKey } from "@/lib/refund-policy";
 import { formatPaise, getPaymentProvider } from "./index";
 import type { PaymentProvider } from "./types";
+import { createNotification } from "@/lib/notifications";
 
 /** A refund request that never reached the gateway is retried after this long. */
 export const STUCK_REFUND_AFTER_MS = 2 * 60 * 1000;
@@ -180,8 +181,7 @@ async function notifyRefund(repo: MedrellaRepository, refund: RefundEntity): Pro
   const template =
     refund.status === "PROCESSED" ? "REFUND_PROCESSED" : refund.status === "FAILED" ? "REFUND_FAILED" : "REFUND_INITIATED";
 
-  await repo.createNotification({
-    id: `notif-${crypto.randomUUID()}`,
+  await createNotification(repo, {
     userId: user.id,
     appointmentId: refund.appointmentId,
     channel: "EMAIL",
@@ -196,9 +196,6 @@ async function notifyRefund(repo: MedrellaRepository, refund: RefundEntity): Pro
       receiptNo: payment.receiptNo,
       reason: refund.reason ?? undefined,
     },
-    status: "PENDING",
-    scheduledFor: new Date(),
-    attempts: 0,
     dedupeKey: `refund-${refund.id}-${refund.status}`,
   });
 }

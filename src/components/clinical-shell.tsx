@@ -82,6 +82,7 @@ export function ClinicalShell({ user, children }: ClinicalShellProps) {
     if (pathname.startsWith("/queue")) return "Live Token Queue";
     if (pathname === "/doctors") return "Specialists Directory";
     if (pathname.startsWith("/doctors/")) return "Book Consultation";
+    if (pathname.startsWith("/admin/notifications")) return "Notification Delivery Engine";
     if (pathname.startsWith("/reports")) return "Visit Reports & Analytics";
     if (pathname.startsWith("/patient/payments")) return "Payments & Receipts";
     if (pathname.startsWith("/patient/dashboard")) return "Patient Portal";
@@ -180,6 +181,15 @@ export function ClinicalShell({ user, children }: ClinicalShellProps) {
                 <CreditCard size={17} />
                 <span>Payments & Receipts</span>
               </Link>
+
+              <Link
+                href="/settings"
+                onClick={() => setSidebarOpen(false)}
+                className={`nav-item ${pathname.startsWith("/settings") ? "active" : ""}`}
+              >
+                <Settings size={17} />
+                <span>Notification Settings</span>
+              </Link>
             </nav>
           </>
         ) : user?.role === "DOCTOR" ? (
@@ -252,6 +262,15 @@ export function ClinicalShell({ user, children }: ClinicalShellProps) {
                 <Settings size={17} />
                 <span>Facility Settings</span>
               </Link>
+
+              <Link
+                href="/admin/notifications"
+                onClick={() => setSidebarOpen(false)}
+                className={`nav-item ${pathname.startsWith("/admin/notifications") ? "active" : ""}`}
+              >
+                <Bell size={17} />
+                <span>Notification Outbox</span>
+              </Link>
             </nav>
           </>
         ) : (
@@ -292,6 +311,15 @@ export function ClinicalShell({ user, children }: ClinicalShellProps) {
               >
                 <CreditCard size={17} />
                 <span>Payments & Receipts</span>
+              </Link>
+
+              <Link
+                href="/settings"
+                onClick={() => setSidebarOpen(false)}
+                className={`nav-item ${pathname.startsWith("/settings") ? "active" : ""}`}
+              >
+                <Settings size={17} />
+                <span>Notification Settings</span>
               </Link>
             </nav>
           </>

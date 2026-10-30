@@ -1,5 +1,13 @@
 export type NotificationChannelType = "EMAIL" | "SMS" | "WHATSAPP";
 export type NotificationStatusType = "PENDING" | "SENT" | "FAILED" | "CANCELLED";
+export type NotificationCategory = "operational" | "promotional";
+
+export interface NotificationPreferencesEntity {
+  userId: string;
+  emailPromotional: boolean;
+  consentedAt?: Date | null;
+  updatedAt: Date;
+}
 
 export interface NotificationPayload {
   patientName?: string;
@@ -14,7 +22,9 @@ export interface NotificationPayload {
   receiptNo?: string;
   paymentId?: string;
   reason?: string;
+  unsubscribeUrl?: string;
   customMessage?: string;
+  reminderOffsetMinutes?: number;
   [key: string]: any;
 }
 
@@ -23,6 +33,7 @@ export interface NotificationItem {
   userId: string;
   appointmentId?: string | null;
   channel: NotificationChannelType;
+  category?: NotificationCategory;
   template: string;
   recipient: string;
   payload?: NotificationPayload | null;
@@ -31,6 +42,7 @@ export interface NotificationItem {
   attempts: number;
   lastError?: string | null;
   dedupeKey?: string | null;
+  providerMessageId?: string | null;
   sentAt?: Date | null;
   createdAt: Date;
 }

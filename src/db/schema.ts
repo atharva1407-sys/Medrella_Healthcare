@@ -199,6 +199,7 @@ export const notifications = pgTable(
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     appointmentId: text("appointment_id").references(() => appointments.id, { onDelete: "cascade" }),
     channel: text("channel").notNull().$type<"EMAIL" | "SMS" | "WHATSAPP">().default("EMAIL"),
+    category: text("category").notNull().$type<"operational" | "promotional">().default("operational"),
     template: text("template").notNull(),
     recipient: text("recipient").notNull(),
     payload: jsonb("payload"),
@@ -207,6 +208,7 @@ export const notifications = pgTable(
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
     dedupeKey: text("dedupe_key").unique(),
+    providerMessageId: text("provider_message_id"),
     sentAt: timestamp("sent_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -214,8 +216,16 @@ export const notifications = pgTable(
     index("notifications_status_scheduled_idx").on(table.status, table.scheduledFor),
     index("notifications_user_idx").on(table.userId),
     index("notifications_appointment_idx").on(table.appointmentId),
+    index("notifications_category_idx").on(table.category),
   ]
 );
+
+export const notificationPreferences = pgTable("notification_preferences", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  emailPromotional: boolean("email_promotional").default(false).notNull(),
+  consentedAt: timestamp("consented_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 export type User = typeof users.$inferSelect;
 export type Patient = typeof patients.$inferSelect;
@@ -228,3 +238,4 @@ export type Payment = typeof payments.$inferSelect;
 export type PaymentEvent = typeof paymentEvents.$inferSelect;
 export type Refund = typeof refunds.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
+export type NotificationPreference = typeof notificationPreferences.$inferSelect;

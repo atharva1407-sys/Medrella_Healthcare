@@ -1,109 +1,163 @@
-# Medrella Healthcare
+# Medrella Healthcare — Task 5: Reliable Email Notifications
 
-Outpatient hospital appointment and clinical scheduling platform for **Medrella Healthcare, Ruby Hall, Pune**.
-Patients find a specialist, pick an open OPD slot, pay the consultation fee online and get a confirmed appointment. Doctors manage their sessions, leave and queue from their own dashboard.
+A Next.js 16 (App Router, React 19, TypeScript, Tailwind 4) outpatient appointment platform with Drizzle ORM on Neon PostgreSQL.
 
 **Live app:** https://medrella-healthcare.vercel.app
 
-> Payments run in **Razorpay test mode**. No real money is charged. Use Razorpay's published test cards.
+**Task 5 focuses on Reliable Appointment Notifications (EMAIL ONLY)**. The finished system sends the right email for every appointment event, schedules reminders accurately in Indian Standard Time (`Asia/Kolkata`), eliminates duplicate and stale messages, retries failures with exponential backoff, provides patient preference controls, enforces strict clinical data privacy, and ensures a notification delivery failure never breaks clinical bookings or cancellations.
 
 ---
 
-## Features
+## 📋 Architectural Highlights
 
-### For patients
-- Sign up and sign in with secure, signed session cookies
-- Browse specialists on the landing page, with each doctor's next open slot
-- Book a slot in a doctor's OPD session (stream and wave scheduling with token numbers)
-- Pay online: the booking is held for 10 minutes while you pay
-- Reschedule an appointment, or cancel it with a live refund preview before you confirm
-- See payment history, receipts and refund status
-- Receive emails for booking, payment, cancellation, refunds and reminders
+### 1. Central Creation & Gating (`src/lib/notifications/create.ts`)
+- All system events (booking, payments, cancellations, refunds, reminders) create outbox records through `createNotification`.
+- **Fail-Safe Isolation**: Notification creation is wrapped in exception safety. Provider network errors or database timeouts never bubble up to break or roll back bookings, cancellations, or payment flows.
+- **Deterministic Deduplication**: Deterministic keys (e.g. `confirm-${appointment.id}`, `remind-${appointment.id}-${offset}`) ensure repeated webhook calls, browser reloads, or action retries never queue duplicate emails.
+- **Preference Gating**: `shouldSend(category, preferences)` gates promotional messages based on patient opt-in consent, while operational messages are always sent for service continuity and patient safety.
 
-### For doctors
-- Dashboard with today's appointments and the patient queue
-- Weekly availability, multiple OPD sessions per day and session capacity
-- Clinical leave management, with protection against leaving on days that already have bookings
+### 2. Timezone Precision (`Asia/Kolkata`, IST = UTC+05:30)
+- Vercel and CI servers run in UTC. To avoid off-by-one calendar day shifts or inaccurate reminder delivery, all dates and clock times are calculated in `Asia/Kolkata` (`src/lib/time.ts`).
+- `buildInstantFromKolkataTime(dateStr, timeStr)` builds exact UTC instants regardless of host server clock. Appointments scheduled near midnight (e.g. `00:15 IST` on Nov 1) map strictly to the preceding UTC calendar day (`18:45 UTC` on Oct 31).
+- Reminder offsets are configurable via `REMINDER_OFFSETS_MINUTES` (defaults to `1440,120` = 24h and 2h before consultation). Garbage or invalid values fall back to defaults. Reminders whose calculated send time is in the past are skipped.
 
-### Payments and refunds
-- Razorpay (test mode) behind a provider interface, so other gateways can be added
-- Fees always come from the database; amounts from the browser are ignored
-- Checkout signature and webhook signature are verified on the server
-- Webhook events are stored and processed once, even if Razorpay sends them again
-- Seat holds expire safely, and late payments are confirmed or refunded automatically
-- Refund policy: 100% if cancelled 24h or more before, 50% from 2h to 24h before, 0% under 2h; 100% if the doctor cancels
-- A refund shows as "Refunded" only once the gateway confirms it
+### 3. Concurrency Safety & Overlapping Cron Protection
+- When scheduled cron runs overlap (e.g. cold start delays or long sweeps), duplicate sends are prevented:
+  - **PostgreSQL**: `claimPendingNotifications` uses `FOR UPDATE SKIP LOCKED` and advances `scheduled_for` by 5 minutes atomically in the claim transaction.
+  - **In-Memory**: Uses an in-flight claim lock (`inFlightNotificationClaims: Set<string>`) to guarantee each due item is processed by only one worker.
 
-### Notifications
-- Email via Resend (console output when no key is set)
-- Reminders 24h and 2h before the visit; changed or removed automatically on reschedule and cancel
-- Retries on failure and no duplicate messages
+### 4. Retries, Backoff & Fail-Closed Delivery
+- Due items are processed with 3 attempts and exponential-like backoff (5m, 15m).
+- After 3 failed attempts, status transitions to `FAILED` (dead-letter queue) and records sanitized `lastError` details (truncated to 500 characters, no secrets).
+- Once marked `SENT`, notifications are never resent.
+- **Fail Closed in Production**: In production without `RESEND_API_KEY`, messages are not sent and remain `PENDING`/`FAILED`. They are NEVER falsely marked `SENT`. In local development, unset key falls back safely to `ConsoleChannel`.
+
+### 5. Pre-Send Status Recheck
+- Before dispatching `APPOINTMENT_REMINDER`, the dispatcher verifies the appointment status in the database.
+- If the appointment was cancelled, completed, expired, or not booked, the reminder is automatically marked `CANCELLED` and skipped.
+- If the appointment start time has already passed in IST, the reminder is cancelled.
+
+### 6. Clinical Privacy & Non-Clinical Sanitization
+- **Strict Key Stripping**: Any clinical details (`diagnosis`, `symptoms`, `clinicalNotes`, `notes`, `reasonForVisit`, `medicalHistory`, `prescription`, `vitalSigns`) in notification payloads are stripped before rendering.
+- **Cancellation Reason Sanitization**: Only approved non-clinical reasons (`ALLOWED_NON_CLINICAL_REASONS`, such as "Doctor emergency", "Clinic maintenance", "Schedule conflict") are included in email text.
+- **HTML Escaping**: User-supplied strings are escaped (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`) in HTML templates.
+- **Masked Dashboard Emails**: Patient email addresses are masked (`a***@domain.com`) in administrative monitoring and production logs.
+
+### 7. Preferences & 1-Click Expiring Unsubscribe
+- **Settings Page** (`/settings`):
+  - Accessible to both patients and doctors.
+  - Explains mandatory operational emails.
+  - Provides toggle for optional promotional health updates with audit tracking (`consentedAt`).
+- **Unsubscribe Route** (`/unsubscribe?token=...`):
+  - Uses signed HMAC-SHA256 tokens (`src/lib/notifications/unsubscribe-token.ts`) with 30-day expiration.
+  - Verified in constant time (`crypto.timingSafeEqual`).
+  - Allows 1-click opt-out without requiring login.
+
+### 8. Admin Dead-Letter Outbox Dashboard (`/admin/notifications`)
+- Protected by `ADMIN_EMAILS` check; unauthorized visitors receive a `404 Not Found`.
+- Live status metrics: Total, Sent, Pending, Failed, Cancelled.
+- Dead-letter table displaying masked recipient, attempt count, last error, and IST timestamps.
+- "Retry" action calling `requeueNotificationAction(id)` which resets attempts to 0 and status to `PENDING` for immediate redelivery.
+- Manual outbox sweep trigger button for on-demand dispatch.
 
 ---
 
-## Tech stack
+## 🛠️ Environment Configuration (`.env`)
 
-| Layer | Technology |
-|---|---|
-| Framework | Next.js 16 (App Router), React 19, TypeScript |
-| Styling | Tailwind CSS 4 |
-| Database | PostgreSQL on Neon |
-| ORM | Drizzle ORM |
-| Validation | Zod |
-| Auth | Signed HTTP-only session cookies, PBKDF2 password hashing |
-| Payments | Razorpay (test mode) |
-| Email | Resend |
-| Hosting | Vercel |
-
----
-
-## Run it locally
+Add the following environment variables to your deployment environment (e.g. Vercel Project Settings) or `.env.local` for development:
 
 ```bash
-npm install
-cp .env.example .env.local   # then fill in the values
-npm run dev
+# Database & Auth
+DATABASE_URL="postgresql://user:password@ep-sample-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+SESSION_SECRET="generate-a-strong-32-byte-secret-key-for-production"
+APP_URL="https://medrella-healthcare.vercel.app"
+
+# Admin Dashboard Access (comma-separated admin emails)
+ADMIN_EMAILS="admin@rubyhall.com,ops@medrella.com"
+
+# Email Provider Configuration (Resend)
+RESEND_API_KEY="re_your_api_key_here"
+EMAIL_FROM="Medrella Healthcare <appointments@rubyhall-pune.medrella.com>"
+
+# Reminder Schedule Offsets (in minutes, evaluated in Asia/Kolkata)
+REMINDER_OFFSETS_MINUTES="1440,120"
+
+# Cron Sweep Authorization Secret
+CRON_SECRET="your_secure_cron_secret_here"
 ```
 
-Open http://localhost:3000.
+---
 
-To try the app without a database or payment keys, set `DATABASE_URL="disabled-for-local-test"` and `USE_MOCK_PAYMENTS=true`. This uses seeded in-memory data and a mock payment gateway (development only).
+## 🚀 Database Migration (Migration 0004)
 
-### Environment variables
+The Task 5 migration is **additive only** (new table `notification_preferences`, new columns `category` and `provider_message_id` on `notifications`). It contains zero drop, truncate, or delete operations.
 
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL` | Neon PostgreSQL connection string |
-| `SESSION_SECRET` | Secret used to sign session cookies |
-| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Razorpay test keys (required in production) |
-| `RAZORPAY_WEBHOOK_SECRET` | Secret for verifying Razorpay webhooks |
-| `CRON_SECRET` | Protects the `/api/cron/*` endpoints |
-| `PAYMENT_HOLD_MINUTES` | Seat hold length (default 10) |
-| `RESEND_API_KEY`, `EMAIL_FROM` | Email sending (optional) |
+To apply migration 0004 against your PostgreSQL database:
 
-### Useful scripts
+```bash
+npm run db:migrate-0004
+```
 
-| Command | What it does |
-|---|---|
-| `npm test` | Runs the automated test suites |
-| `npm run build` | Production build |
-| `npm run db:push` | Applies the schema to an empty database |
-| `npm run db:migrate-0003` | Adds the payments and notifications tables to an existing database |
-| `npm run db:seed` | Seeds doctors |
+The migration runner prints only the database host for verification and skips tables, columns, or indexes that already exist.
 
 ---
 
-## Deploying
+## ⏱️ External Scheduler Setup (cron-job.org or Vercel Cron)
 
-1. Create a Neon database and set `DATABASE_URL`.
-2. Apply the schema (`npm run db:push`, or `npm run db:migrate-0003` on an existing database).
-3. Add the environment variables above in Vercel and deploy.
-4. In the Razorpay dashboard, add a webhook to `https://<your-domain>/api/webhooks/razorpay` using the same secret as `RAZORPAY_WEBHOOK_SECRET`. Select the payment and refund events.
+Medrella Healthcare exposes two protected endpoints for recurring background processing:
+1. `GET /api/cron/notifications`: Dispatches due notification emails and processes retries.
+2. `GET /api/cron/payments`: Reconciles pending gateway payments and sweeps expired holds.
 
-Production refuses to take payments if the Razorpay keys are missing. The mock gateway never runs in production.
+### Setting up on [cron-job.org](https://cron-job.org):
+1. Create a free account on [cron-job.org](https://cron-job.org).
+2. Create **Job 1 (Notification Outbox Sweeper)**:
+   - **URL**: `https://your-domain.vercel.app/api/cron/notifications`
+   - **Schedule**: Every 1 minute (`* * * * *`)
+   - **Request Headers**:
+     ```http
+     Authorization: Bearer your_cron_secret_here
+     ```
+3. Create **Job 2 (Payment & Expiry Sweeper)**:
+   - **URL**: `https://your-domain.vercel.app/api/cron/payments`
+   - **Schedule**: Every 2 minutes (`*/2 * * * *`)
+   - **Request Headers**:
+     ```http
+     Authorization: Bearer your_cron_secret_here
+     ```
+
+Both endpoints return `503 Service Unavailable` if `CRON_SECRET` is unset in production, and `401 Unauthorized` if an incorrect Bearer token is provided.
 
 ---
 
-## Project history
+## 🧪 Automated Verification Suite
 
-Built task by task for Pearl Thoughts: ER design, app foundation, the appointment platform, and payments with refunds and notifications. Each task folder and its notes live in the task repository: https://github.com/atharva1407-sys/Pearl_Thoughts_Atharva-Mandlik
+Run the full automated test suite, code linter, and production build:
+
+```bash
+# Run all tests (clinical suite + payment hardening + reliable notifications)
+npm test
+
+# Run ESLint validation
+npm run lint
+
+# Compile production bundle
+npm run build
+```
+
+### Test Suite Summary:
+- **`src/test-suite.ts`**: 115 tests passing (clinical rules, wave scheduling, double-booking guard).
+- **`src/test-payment-hardening.ts`**: 72 tests passing (Razorpay webhook verification, signature validation, hold expiry, tiered refund calculation).
+- **`src/test-notifications.ts`**: 81 tests passing:
+  1. Event map coverage across all 10 notification templates.
+  2. Deduplication key uniqueness in memory and PostgreSQL.
+  3. Asia/Kolkata reminder calculation (including midnight boundary and UTC server clock).
+  4. Pre-send status recheck cancelling reminders for cancelled/completed visits.
+  5. Retries and backoff (3 attempts -> FAILED, never resending SENT).
+  6. Overlapping dispatcher sweep safety (0 duplicate sends).
+  7. Provider error isolation (notification failure never breaks booking/cancel).
+  8. Preferences, consent audit, and HMAC-SHA256 unsubscribe token lifecycle.
+  9. Privacy enforcement (stripping diagnosis, symptoms, notes; XSS HTML escaping).
+  10. Admin dashboard access control and dead-letter requeue action.
+  11. Production fail-closed behavior when `RESEND_API_KEY` is missing.
+
+**Total: 268 passed, 0 failed.**

@@ -15,7 +15,19 @@ export class EmailChannel implements NotificationChannel {
   }
 
   public async send(notification: NotificationItem): Promise<SendResult> {
-    if (!this.apiKey) {
+    const isProduction = process.env.NODE_ENV === "production";
+    const apiKey = this.apiKey || process.env.RESEND_API_KEY?.trim();
+
+    // When no API key is provided:
+    if (!apiKey) {
+      if (isProduction) {
+        // Fail closed in production: do NOT mark messages SENT without a real provider!
+        return {
+          success: false,
+          error: "Email delivery failed: RESEND_API_KEY is not configured in production environment (fail closed).",
+        };
+      }
+      // In development and testing, fall back safely to the console logger
       return this.fallbackConsole.send(notification);
     }
 
@@ -25,7 +37,7 @@ export class EmailChannel implements NotificationChannel {
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -39,9 +51,11 @@ export class EmailChannel implements NotificationChannel {
 
       if (!res.ok) {
         const errText = await res.text();
+        // Sanitize error text to avoid leaking secrets in logs or database
+        const cleanErr = errText.replace(/Bearer\s+[A-Za-z0-9_\-]+/gi, "Bearer [REDACTED]");
         return {
           success: false,
-          error: `Resend error (${res.status}): ${errText}`,
+          error: `Resend HTTP ${res.status}: ${cleanErr.slice(0, 255)}`,
         };
       }
 
@@ -50,10 +64,10 @@ export class EmailChannel implements NotificationChannel {
         success: true,
         messageId: data.id,
       };
-    } catch (err) {
+    } catch (err: any) {
       return {
         success: false,
-        error: (err as Error).message,
+        error: err?.message ? String(err.message).slice(0, 255) : "Network error while connecting to email provider",
       };
     }
   }

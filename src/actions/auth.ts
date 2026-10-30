@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import crypto from "crypto";
 import { dbRepo } from "@/db/repo";
+import { sendWelcomeEmail } from "@/lib/notifications/welcome";
 import {
   hashPassword,
   verifyPassword,
@@ -182,6 +183,14 @@ export async function registerPatientAction(formData: FormData) {
     address: parsed.data.address,
   });
 
+  await sendWelcomeEmail(dbRepo, {
+    userId,
+    email: parsed.data.email,
+    firstName: parsed.data.firstName,
+    lastName: parsed.data.lastName,
+    role: "PATIENT",
+  });
+
   const token = createSessionToken({
     userId,
     email: parsed.data.email,
@@ -262,6 +271,14 @@ export async function registerDoctorAction(formData: FormData) {
       isActive: ["MON", "TUE", "WED", "THU", "FRI"].includes(day),
     });
   }
+
+  await sendWelcomeEmail(dbRepo, {
+    userId,
+    email: parsed.data.email,
+    firstName: parsed.data.firstName,
+    lastName: parsed.data.lastName,
+    role: "DOCTOR",
+  });
 
   const token = createSessionToken({
     userId,
