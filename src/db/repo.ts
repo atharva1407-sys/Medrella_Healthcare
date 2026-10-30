@@ -147,12 +147,21 @@ export interface RefundEntity {
 
 export type NotificationChannel = "EMAIL" | "SMS" | "WHATSAPP";
 export type NotificationStatus = "PENDING" | "SENT" | "FAILED" | "CANCELLED";
+export type NotificationCategory = "operational" | "promotional";
+
+export interface NotificationPreferencesEntity {
+  userId: string;
+  emailPromotional: boolean;
+  consentedAt?: Date | null;
+  updatedAt: Date;
+}
 
 export interface NotificationEntity {
   id: string;
   userId: string;
   appointmentId?: string | null;
   channel: NotificationChannel;
+  category?: NotificationCategory;
   template: string;
   recipient: string;
   payload?: any;
@@ -161,6 +170,7 @@ export interface NotificationEntity {
   attempts: number;
   lastError?: string | null;
   dedupeKey?: string | null;
+  providerMessageId?: string | null;
   sentAt?: Date | null;
   createdAt: Date;
 }
@@ -371,6 +381,8 @@ export class MedrellaRepository {
   private memPaymentEvents: PaymentEventEntity[] = [];
   private memRefunds: RefundEntity[] = [];
   private memNotifications: NotificationEntity[] = [];
+  private memNotificationPreferences: NotificationPreferencesEntity[] = [];
+  private inFlightNotificationClaims: Set<string> = new Set<string>();
 
   constructor() {
     if (!isPostgresConfigured() && process.env.ENABLE_SEED_DATA !== "false" && process.env.NODE_ENV !== "production") {
@@ -389,6 +401,9 @@ export class MedrellaRepository {
     this.memAvailabilities = [];
     this.memAppointments = [];
     this.memDoctorLeaves = [];
+    this.memNotifications = [];
+    this.memNotificationPreferences = [];
+    this.inFlightNotificationClaims = new Set<string>();
 
     const defaultPasswordHash = hashPassword(getSeedDoctorPassword({ allowDevFallback: true }));
 
@@ -2172,6 +2187,7 @@ export class MedrellaRepository {
     const now = new Date();
     const cleanNotification: NotificationEntity = {
       ...notification,
+      category: notification.category || "operational",
       createdAt: notification.createdAt || now,
     };
 
@@ -2194,6 +2210,7 @@ export class MedrellaRepository {
           userId: cleanNotification.userId,
           appointmentId: cleanNotification.appointmentId ?? null,
           channel: cleanNotification.channel,
+          category: cleanNotification.category,
           template: cleanNotification.template,
           recipient: cleanNotification.recipient,
           payload: cleanNotification.payload ?? null,
@@ -2202,6 +2219,7 @@ export class MedrellaRepository {
           attempts: cleanNotification.attempts,
           lastError: cleanNotification.lastError ?? null,
           dedupeKey: cleanNotification.dedupeKey ?? null,
+          providerMessageId: cleanNotification.providerMessageId ?? null,
           sentAt: cleanNotification.sentAt ?? null,
         })
         .returning();
@@ -2214,6 +2232,113 @@ export class MedrellaRepository {
     }
     this.memNotifications.push(cleanNotification);
     return cleanNotification;
+  }
+
+  public async getNotificationPreferences(userId: string): Promise<NotificationPreferencesEntity | undefined> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.notificationPreferences)
+        .where(eq(schema.notificationPreferences.userId, userId))
+        .limit(1);
+      return rows[0] as NotificationPreferencesEntity | undefined;
+    }
+    return this.memNotificationPreferences.find((p) => p.userId === userId);
+  }
+
+  public async upsertNotificationPreferences(
+    userIdOrData: string | { userId: string; emailPromotional: boolean; consentedAt?: Date | null },
+    emailPromotionalArg?: boolean,
+    consentedAtArg?: Date | null
+  ): Promise<NotificationPreferencesEntity> {
+    this.checkProductionDatabase();
+    let userId: string;
+    let emailPromotional: boolean;
+    let consentedAt: Date | null | undefined;
+
+    if (typeof userIdOrData === "object" && userIdOrData !== null) {
+      userId = userIdOrData.userId;
+      emailPromotional = Boolean(userIdOrData.emailPromotional);
+      consentedAt = userIdOrData.consentedAt;
+    } else {
+      userId = userIdOrData;
+      emailPromotional = Boolean(emailPromotionalArg);
+      consentedAt = consentedAtArg;
+    }
+
+    const now = new Date();
+    const entry: NotificationPreferencesEntity = {
+      userId,
+      emailPromotional,
+      consentedAt: consentedAt !== undefined ? consentedAt : (emailPromotional ? now : null),
+      updatedAt: now,
+    };
+
+    if (db) {
+      const [res] = await db
+        .insert(schema.notificationPreferences)
+        .values({
+          userId: entry.userId,
+          emailPromotional: entry.emailPromotional,
+          consentedAt: entry.consentedAt,
+          updatedAt: entry.updatedAt,
+        })
+        .onConflictDoUpdate({
+          target: schema.notificationPreferences.userId,
+          set: {
+            emailPromotional: entry.emailPromotional,
+            consentedAt: entry.consentedAt,
+            updatedAt: entry.updatedAt,
+          },
+        })
+        .returning();
+      return res as NotificationPreferencesEntity;
+    }
+
+    const idx = this.memNotificationPreferences.findIndex((p) => p.userId === userId);
+    if (idx >= 0) {
+      this.memNotificationPreferences[idx] = entry;
+    } else {
+      this.memNotificationPreferences.push(entry);
+    }
+    return entry;
+  }
+
+  public async claimPendingNotifications(cutoff: Date = new Date(), limit: number = 25): Promise<NotificationEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const query = sql`
+        WITH due AS (
+          SELECT id
+          FROM notifications
+          WHERE status = 'PENDING' AND scheduled_for <= ${cutoff}
+          ORDER BY scheduled_for ASC
+          LIMIT ${limit}
+          FOR UPDATE SKIP LOCKED
+        )
+        UPDATE notifications
+        SET scheduled_for = now() + interval '5 minutes'
+        FROM due
+        WHERE notifications.id = due.id
+        RETURNING notifications.*;
+      `;
+      const res = await db.execute(query);
+      return (res.rows || []) as unknown as NotificationEntity[];
+    }
+
+    const claimed: NotificationEntity[] = [];
+    const now = Date.now();
+    for (const item of this.memNotifications) {
+      if (item.status === "PENDING" && item.scheduledFor.getTime() <= cutoff.getTime()) {
+        if (this.inFlightNotificationClaims.has(item.id)) continue;
+        this.inFlightNotificationClaims.add(item.id);
+        item.scheduledFor = new Date(now + 5 * 60 * 1000);
+        claimed.push(item);
+        if (claimed.length >= limit) break;
+      }
+    }
+    return claimed;
   }
 
   public async getPendingNotifications(cutoff: Date = new Date(), limit: number = 50): Promise<NotificationEntity[]> {
@@ -2239,6 +2364,24 @@ export class MedrellaRepository {
       .slice(0, limit);
   }
 
+  public async getNotificationById(id: string): Promise<NotificationEntity | undefined> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db.select().from(schema.notifications).where(eq(schema.notifications.id, id)).limit(1);
+      return rows[0] as NotificationEntity | undefined;
+    }
+    return this.memNotifications.find((n) => n.id === id);
+  }
+
+  public async getNotificationsByUserId(userId: string): Promise<NotificationEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db.select().from(schema.notifications).where(eq(schema.notifications.userId, userId));
+      return rows as NotificationEntity[];
+    }
+    return this.memNotifications.filter((n) => n.userId === userId);
+  }
+
   public async updateNotificationStatus(
     id: string,
     status: NotificationStatus,
@@ -2247,15 +2390,18 @@ export class MedrellaRepository {
       lastError?: string | null;
       sentAt?: Date | null;
       scheduledFor?: Date;
+      providerMessageId?: string | null;
     }
   ): Promise<boolean> {
     this.checkProductionDatabase();
+    this.inFlightNotificationClaims.delete(id);
     if (db) {
       const updateValues: Record<string, any> = { status };
       if (extra?.attempts !== undefined) updateValues.attempts = extra.attempts;
       if (extra?.lastError !== undefined) updateValues.lastError = extra.lastError;
       if (extra?.sentAt !== undefined) updateValues.sentAt = extra.sentAt;
       if (extra?.scheduledFor !== undefined) updateValues.scheduledFor = extra.scheduledFor;
+      if (extra?.providerMessageId !== undefined) updateValues.providerMessageId = extra.providerMessageId;
       const res = await db.update(schema.notifications).set(updateValues).where(eq(schema.notifications.id, id));
       return (res.rowCount ?? 1) > 0;
     }
@@ -2267,7 +2413,104 @@ export class MedrellaRepository {
     if (extra?.lastError !== undefined) notif.lastError = extra.lastError;
     if (extra?.sentAt !== undefined) notif.sentAt = extra.sentAt;
     if (extra?.scheduledFor !== undefined) notif.scheduledFor = extra.scheduledFor;
+    if (extra?.providerMessageId !== undefined) notif.providerMessageId = extra.providerMessageId;
     return true;
+  }
+
+  public async requeueNotification(id: string): Promise<boolean> {
+    this.checkProductionDatabase();
+    this.inFlightNotificationClaims.delete(id);
+    const now = new Date();
+    if (db) {
+      const res = await db
+        .update(schema.notifications)
+        .set({
+          status: "PENDING",
+          attempts: 0,
+          lastError: null,
+          scheduledFor: now,
+        })
+        .where(eq(schema.notifications.id, id));
+      return (res.rowCount ?? 1) > 0;
+    }
+
+    const notif = this.memNotifications.find((n) => n.id === id);
+    if (!notif) return false;
+    notif.status = "PENDING";
+    notif.attempts = 0;
+    notif.lastError = null;
+    notif.scheduledFor = now;
+    return true;
+  }
+
+  public async countNotificationsByStatus(): Promise<Record<NotificationStatus, number>> {
+    this.checkProductionDatabase();
+    const counts: Record<NotificationStatus, number> = {
+      PENDING: 0,
+      SENT: 0,
+      FAILED: 0,
+      CANCELLED: 0,
+    };
+    if (db) {
+      const rows = await db
+        .select({
+          status: schema.notifications.status,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(schema.notifications)
+        .groupBy(schema.notifications.status);
+      for (const row of rows) {
+        if (row.status && row.status in counts) {
+          counts[row.status as NotificationStatus] = Number(row.count);
+        }
+      }
+      return counts;
+    }
+
+    for (const notif of this.memNotifications) {
+      counts[notif.status] = (counts[notif.status] || 0) + 1;
+    }
+    return counts;
+  }
+
+  public async getFailedNotifications(limit: number = 50): Promise<NotificationEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.notifications)
+        .where(eq(schema.notifications.status, "FAILED"))
+        .orderBy(desc(schema.notifications.createdAt))
+        .limit(limit);
+      return rows as NotificationEntity[];
+    }
+    return this.memNotifications
+      .filter((n) => n.status === "FAILED")
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  public async getLongPendingNotifications(stuckMinutes: number = 10, limit: number = 50): Promise<NotificationEntity[]> {
+    this.checkProductionDatabase();
+    const cutoff = new Date(Date.now() - stuckMinutes * 60 * 1000);
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.notifications)
+        .where(
+          and(
+            eq(schema.notifications.status, "PENDING"),
+            lte(schema.notifications.createdAt, cutoff)
+          )
+        )
+        .orderBy(schema.notifications.createdAt)
+        .limit(limit);
+      return rows as NotificationEntity[];
+    }
+    return this.memNotifications
+      .filter((n) => n.status === "PENDING" && n.createdAt.getTime() <= cutoff.getTime())
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .slice(0, limit);
   }
 
   public async cancelPendingNotificationsForAppointment(

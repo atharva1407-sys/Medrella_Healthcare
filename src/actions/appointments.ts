@@ -15,6 +15,7 @@ import type { PreparedRefund } from "@/lib/payments/refunds";
 import { finalizeConfirmedBooking } from "@/lib/payments/finalize";
 import { computeRefund } from "@/lib/refund-policy";
 import {
+  createNotification,
   scheduleAppointmentReminders,
   updateRescheduledReminders,
   cancelAppointmentReminders,
@@ -125,8 +126,7 @@ export async function createBookingHoldAction(formData: FormData) {
     }
 
     // Schedule reminders and confirmation notification
-    await dbRepo.createNotification({
-      id: `notif-${crypto.randomUUID()}`,
+    await createNotification(dbRepo, {
       userId: user.userId,
       appointmentId: result.appointment.id,
       channel: "EMAIL",
@@ -143,9 +143,6 @@ export async function createBookingHoldAction(formData: FormData) {
         receiptNo: "FREE-VISIT",
         amountFormatted: "Free",
       },
-      status: "PENDING",
-      scheduledFor: new Date(),
-      attempts: 0,
       dedupeKey: `confirm-${result.appointment.id}`,
     });
 
@@ -602,8 +599,7 @@ export async function rescheduleAppointmentAction(formData: FormData) {
   }
 
   // Queue reschedule notification
-  await dbRepo.createNotification({
-    id: `notif-${crypto.randomUUID()}`,
+  await createNotification(dbRepo, {
     userId: user.userId,
     appointmentId: result.appointment.id,
     channel: "EMAIL",
@@ -620,9 +616,7 @@ export async function rescheduleAppointmentAction(formData: FormData) {
       previousDate: appointment.appointmentDate,
       previousTime: appointment.startTime,
     },
-    status: "PENDING",
-    scheduledFor: new Date(),
-    attempts: 0,
+    dedupeKey: `reschedule-${result.appointment.id}-${result.appointment.appointmentDate}-${result.appointment.startTime}`,
   });
 
   runInBackground(async () => {
@@ -771,25 +765,23 @@ export async function cancelAppointmentAction(appointmentId: string) {
   const patientUser = patientRecord ? await dbRepo.getUserById(patientRecord.userId) : undefined;
   const doctorRecord = await dbRepo.getDoctorById(appointment.doctorId);
   if (patientRecord && patientUser) {
-    await dbRepo.createNotification({
-      id: `notif-${crypto.randomUUID()}`,
+    const isDoc = user.role === "DOCTOR";
+    const cancelTemplate = isDoc ? "APPOINTMENT_CANCELLED_BY_DOCTOR" : "APPOINTMENT_CANCELLED";
+    await createNotification(dbRepo, {
       userId: patientUser.id,
       appointmentId: appointment.id,
       channel: "EMAIL",
-      template: "APPOINTMENT_CANCELLED",
+      template: cancelTemplate,
       recipient: patientUser.email,
       payload: {
         patientName: `${patientRecord.firstName} ${patientRecord.lastName}`,
         doctorName: doctorRecord ? `${doctorRecord.firstName} ${doctorRecord.lastName}` : "your doctor",
         appointmentDate: appointment.appointmentDate,
         startTime: appointment.startTime,
-        reason: user.role === "DOCTOR" ? "Cancelled by the doctor" : undefined,
+        reason: isDoc ? "Cancelled by doctor / clinical schedule update" : undefined,
         refundAmountFormatted:
           refundForEmail && refundForEmail.status !== "FAILED" ? formatPaise(refundForEmail.amountPaise) : undefined,
       },
-      status: "PENDING",
-      scheduledFor: new Date(),
-      attempts: 0,
       dedupeKey: `cancel-notif-${appointment.id}`,
     });
   }

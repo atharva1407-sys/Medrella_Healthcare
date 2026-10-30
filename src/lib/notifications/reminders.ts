@@ -1,19 +1,32 @@
-import { MedrellaRepository, AppointmentEntity, DoctorEntity, UserEntity } from "../../db/repo";
+import { MedrellaRepository, AppointmentEntity, DoctorEntity } from "../../db/repo";
 import { formatPaise } from "../payments";
+import { buildInstantFromKolkataTime } from "../time";
+import { createNotification } from "./create";
+
+export const DEFAULT_REMINDER_OFFSETS_MINUTES = [1440, 120]; // 24 hours and 2 hours
 
 /**
- * Returns reminder offsets in minutes from environment variable (default: 1440, 120 -> 24h and 2h).
+ * Returns reminder offsets in minutes from environment variable.
+ * Validates strictly, ignores non-positive / non-numeric tokens, and falls back to [1440, 120].
  */
 export function getReminderOffsetsMinutes(): number[] {
-  const envVal = process.env.REMINDER_OFFSETS_MINUTES || "1440,120";
-  return envVal
+  const envVal = process.env.REMINDER_OFFSETS_MINUTES;
+  if (!envVal || typeof envVal !== "string") {
+    return DEFAULT_REMINDER_OFFSETS_MINUTES;
+  }
+
+  const parsed = envVal
     .split(",")
     .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !isNaN(n) && n > 0);
+    .filter((n) => !isNaN(n) && Number.isFinite(n) && n > 0);
+
+  return parsed.length > 0 ? parsed : DEFAULT_REMINDER_OFFSETS_MINUTES;
 }
 
 /**
  * Creates outbox reminder notifications for a newly confirmed appointment.
+ * Computes exact instants in Asia/Kolkata and skips any reminders whose scheduled instant
+ * is already in the past.
  */
 export async function scheduleAppointmentReminders(
   repo: MedrellaRepository,
@@ -25,20 +38,20 @@ export async function scheduleAppointmentReminders(
   now: Date = new Date()
 ): Promise<number> {
   const offsets = getReminderOffsetsMinutes();
-  const appointmentStart = new Date(`${appointment.appointmentDate}T${appointment.startTime}:00`);
+  const appointmentInstant = buildInstantFromKolkataTime(appointment.appointmentDate, appointment.startTime);
 
   let scheduledCount = 0;
   for (const offset of offsets) {
-    const scheduledFor = new Date(appointmentStart.getTime() - offset * 60 * 1000);
+    const scheduledFor = new Date(appointmentInstant.getTime() - offset * 60 * 1000);
 
-    // Only schedule future reminders
+    // Only schedule reminders that are in the future
     if (scheduledFor.getTime() > now.getTime()) {
       const dedupeKey = `reminder-${appointment.id}-${offset}`;
-      await repo.createNotification({
-        id: `notif-${crypto.randomUUID()}`,
+      await createNotification(repo, {
         userId: patientUserId,
         appointmentId: appointment.id,
         channel: "EMAIL",
+        category: "operational",
         template: "APPOINTMENT_REMINDER",
         recipient: recipientEmail,
         payload: {
@@ -52,9 +65,7 @@ export async function scheduleAppointmentReminders(
           amountFormatted: formatPaise(doctor.consultationFee * 100),
           reminderOffsetMinutes: offset,
         },
-        status: "PENDING",
         scheduledFor,
-        attempts: 0,
         dedupeKey,
       });
       scheduledCount++;
@@ -65,7 +76,7 @@ export async function scheduleAppointmentReminders(
 }
 
 /**
- * Cancels old reminders and creates new ones on appointment reschedule.
+ * Cancels old reminders and creates new ones on appointment reschedule with latest details.
  */
 export async function updateRescheduledReminders(
   repo: MedrellaRepository,

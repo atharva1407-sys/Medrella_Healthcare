@@ -1,114 +1,110 @@
-# Task 4: Razorpay (Test Mode) Payments, Refunds & Notifications
+# Task 5 — Reliable Email Notifications (Changes from Task 4)
 
-Task 4 builds on the Medrella app from [`Task_3`](../Task_3). This folder is the **complete, runnable app** with all Task 4 work included: Task 3's code plus the payment, refund, and notification systems described below. [Files](#files) shows exactly which files Task 4 added, changed, or removed compared with `Task_3`.
+This document describes all changes introduced in **Task 5 (Reliable Email Notifications)** for Medrella Healthcare.
 
-## Assignment
-- Transition the Medrella appointment system from free booking to a **working demo payment system using Razorpay TEST mode** (no real money), with seat holds, automatic and tiered refunds, and outbox email notifications with appointment reminders.
-- Enforce strict server authority on consultation fees, integer paise representation, and transaction advisory locking.
-- Support dual confirmation convergence: browser checkout callback and webhook handler.
-- Handle critical edge cases: late payment after hold expiry, auto-refunds on taken slots, abandoned checkout sweeps, forged signatures, and webhook replay idempotency.
-- Maintain full parity between Neon PostgreSQL and in-memory fallback repositories.
-- Keep all existing 87 clinical verification tests passing and add new test coverage.
+---
 
-## What changed
+## 1. Outpatient Event Notification Map
 
-### Payment Provider Abstraction
-- Introduced `PaymentProvider` interface in `src/lib/payments/types.ts` (`createOrder`, `verifyCheckoutSignature`, `verifyWebhook`, `fetchOrder`, `createRefund`).
-- Built `RazorpayProvider` in `src/lib/payments/razorpay-provider.ts` using Node.js `fetch` with Basic auth and `crypto.timingSafeEqual` signature verification.
-- Built `MockProvider` in `src/lib/payments/mock-provider.ts` for deterministic offline testing and local development without keys.
-- Implemented `getPaymentProvider()` resolver in `src/lib/payments/index.ts`.
+All transactional outpatient communications are evaluated against this event table. Deterministic deduplication keys guarantee that concurrent retries, webhook repeats, or browser refreshes never double-email a patient or doctor.
 
-### Seat Holds & Shared Occupancy Helper
-- Added `PENDING_PAYMENT` and `EXPIRED` appointment statuses with `hold_expires_at` column.
-- Created `src/lib/seat-occupancy.ts` providing `appointmentOccupiesSeat()` and `occupiesSeatSql()` to consistently treat `BOOKED`, `COMPLETED`, `NO_SHOW`, and unexpired `PENDING_PAYMENT` holds as occupying a seat.
-- Updated all slot capacity checks, leave blocking, duplicate booking checks, and triage queue boards to use the shared occupancy helper.
+| Event Trigger | Recipient | Template Name | Category | Dedupe Key Strategy | Why Sent / Purpose |
+|---|---|---|---|---|---|
+| **Appointment Booked** (Free visit or after payment confirmation) | Patient | `BOOKING_CONFIRMED` | Operational (Mandatory) | `confirm-${appointment.id}` | Informs the patient of their booked OPD visit, token number, specialist name, IST date/time, and hospital arrival instructions. |
+| **Payment Captured** (Successful Razorpay payment or verified webhook) | Patient | `PAYMENT_CONFIRMED` | Operational (Mandatory) | `payment-confirmed-${payment.id}` | Provides an official payment receipt with receipt number, transaction ID, consultation fee, and tax breakdown. |
+| **Appointment Cancelled by Patient** (>= 1 hour before start time) | Patient | `APPOINTMENT_CANCELLED` | Operational (Mandatory) | `cancel-notif-${appointment.id}` | Confirms visit cancellation, displays non-clinical cancellation reason, and explains any initiated refund. |
+| **Appointment Cancelled by Doctor** (Physician emergency / schedule shift) | Patient | `APPOINTMENT_CANCELLED_BY_DOCTOR` | Operational (Mandatory) | `cancel-notif-${appointment.id}` | Alerts patient to physician schedule disruption, apologizes, confirms 100% full refund initiation, and offers 1-click rebooking link. |
+| **Appointment Rescheduled** (Slot moved to new date/time) | Patient | `APPOINTMENT_RESCHEDULED` | Operational (Mandatory) | `reschedule-${appointment.id}-${newDate}-${newTime}` | Notifies patient of updated IST appointment date/time, new token number, and reassures them that payment remains valid. |
+| **Appointment Reminder (24h Before)** (Configurable offset: 1440m) | Patient | `APPOINTMENT_REMINDER` | Operational (Mandatory) | `remind-${appointment.id}-1440` | Pre-visit reminder 24 hours prior to appointment; re-verifies appointment status is `BOOKED` before dispatch. |
+| **Appointment Reminder (2h Before)** (Configurable offset: 120m) | Patient | `APPOINTMENT_REMINDER` | Operational (Mandatory) | `remind-${appointment.id}-120` | Day-of-visit reminder 2 hours prior to consultation; includes travel advice and 10-minute early arrival guidance. |
+| **Refund Initiated** (Refund requested by cancellation/sweep) | Patient | `REFUND_INITIATED` | Operational (Mandatory) | `refund-${refund.id}-PENDING` | Confirms refund request has been queued with Razorpay gateway (expected 5–7 banking days credit). |
+| **Refund Processed** (Settled by bank / Razorpay webhook) | Patient | `REFUND_PROCESSED` | Operational (Mandatory) | `refund-${refund.id}-PROCESSED` | Confirms that funds have been settled back to patient's original card/UPI/net-banking account. |
+| **Refund Failed** (Gateway decline or banking issue) | Patient | `REFUND_FAILED` | Operational (Mandatory) | `refund-${refund.id}-FAILED` | Alerts patient of temporary gateway issue and reassures them that billing operations is manually re-issuing funds. |
+| **Doctor Session Cancelled** (Session group deletion/update) | Patient | `APPOINTMENT_CANCELLED_BY_DOCTOR` | Operational (Mandatory) | `cancel-notif-${appointment.id}` | Triggers cancellation with 100% refund for all affected patient bookings in the deleted OPD session. |
+| **Promotional Newsletter / Health Tip** (Framework only; opt-in required) | Patient | `PROMOTIONAL_NEWSLETTER` / `PROMOTIONAL_HEALTH_TIP` | Promotional (Optional) | `promo-${userId}-${campaignId}` | Delivers preventive wellness advisories, health checkup notices; requires user opt-in consent and provides 1-click HMAC unsubscribe token. |
 
-### Dual Confirmation Paths & Idempotency
-- **Browser Return**: Server action `verifyPaymentAndConfirmBookingAction` verifies the checkout signature and confirms appointment as `BOOKED` and payment as `PAID`.
-- **Webhook Route (`POST /api/webhooks/razorpay`)**: Reads raw body via `request.text()`, verifies HMAC-SHA256 signature, inserts into `payment_events` first for idempotency, and handles `payment.captured`, `payment.failed`, `refund.processed`, and `refund.failed`.
-- Both paths converge idempotently.
+---
 
-### Late Payment & Auto-Refund Edge Cases
-- When a payment succeeds after the 10-minute hold expired:
-  - If the slot is still open, it is re-confirmed as `BOOKED`.
-  - If the slot was taken by another patient while expired, it triggers an **automatic 100% refund** and creates an email notification explaining the expiration.
+## 2. Key Architectural Changes
 
-### Tiered Refund Policy
-- Built pure, unit-tested `computeRefund()` in `src/lib/refund-policy.ts`:
-  - Patient cancels ≥ 24h prior: 100% refund.
-  - Patient cancels 2h–24h prior: 50% refund.
-  - Patient cancels < 2h prior: 0% refund.
-  - Doctor cancels (any time): 100% refund.
-  - Reschedule: Free (retains original payment).
-- Built deterministic `buildRefundIdempotencyKey()` to prevent duplicate refunds.
+### 2.1 Additive Schema Migration (`0004_careful_night_nurse.sql`)
+1. **New Table: `notification_preferences`**:
+   - `user_id` (UUID PK, FK to `users.id` with `ON DELETE CASCADE`)
+   - `email_promotional` (boolean, default `false` — strict opt-in)
+   - `consented_at` (timestamp with time zone, audit timestamp)
+   - `updated_at` (timestamp with time zone, auto-updated)
+   - *Operational emails are NOT an adjustable setting*: operational messages (bookings, receipts, refunds, reminders) are mandatory for healthcare delivery and patient safety.
+2. **New Columns on `notifications`**:
+   - `category` (text, default `'operational'` with index `idx_notifications_category`)
+   - `provider_message_id` (text nullable, stores Resend delivery message ID)
+3. **Safe Migration Script**:
+   - Written in `src/db/apply-0004.ts` (safe additive runner that skips `42P07` table exists, `42701` column exists, and `42710` index exists, and logs only the database host without leaking connection credentials).
+   - Added npm script `"db:migrate-0004": "tsx src/db/apply-0004.ts"`.
 
-### Outbox Notifications & Reminder Lifecycle
-- Created `notifications` table storing queued email items within the same transaction as state changes.
-- Implemented `EmailChannel` (Resend) and `ConsoleChannel` (zero-key fallback).
-- Scheduled reminders at 1440m (24h) and 120m (2h) with pre-send appointment status validation.
-- Created cron endpoints: `GET /api/cron/notifications` and `GET /api/cron/payments`.
+### 2.2 Timezone Accuracy (`Asia/Kolkata` IST = UTC+05:30)
+- Added `src/lib/time.ts`:
+  - `buildInstantFromKolkataTime(dateStr, timeStr)`: Deterministically parses calendar date and clock time as IST and yields the exact UTC `Date` instant. Tested across midnight boundaries (e.g. `00:15 IST` on Nov 1 translates strictly to `18:45 UTC` on Oct 31) and month boundaries.
+  - `formatKolkataDate(date)`: Formats dates in Indian English with IST weekday and full month name.
+  - `formatKolkataTime(time)`: Formats clock times in 12-hour AM/PM with explicit `IST` label.
+  - `formatKolkataDateTime(date)`: Formats audit timestamps with full IST date and time.
+- Reminder scheduling in `src/lib/notifications/reminders.ts`:
+  - Validates `REMINDER_OFFSETS_MINUTES` environment variable (ignores non-numeric garbage and falls back to `1440,120`).
+  - Skips scheduling any reminder whose calculated send time is already in the past.
 
-### UI & Patient Experience
-- **Slot Picker (`/doctors/[id]`)**: "Pay ₹{fee} & Book" button, test mode warning, 10-minute hold timer, and interactive test mode checkout dialog.
-- **Patient Dashboard (`/patient/dashboard`)**: Displays payment badges, opportunistic hold sweeping, and cancel modal with live Ruby Hall refund preview.
-- **Billing History (`/patient/payments`)**: Audit list of transactions, amounts, and refund badges.
-- **Printable Receipt (`/patient/payments/[id]/receipt`)**: Clean, computer-generated consultation receipt with browser print capability.
+### 2.3 Concurrency & Overlapping Cron Protection
+- Prevented duplicate sends when cron runs overlap:
+  - **PostgreSQL**: Implemented `FOR UPDATE SKIP LOCKED` query in `claimPendingNotifications(cutoff, limit)` which atomically locks due pending items and advances `scheduled_for` by 5 minutes before releasing.
+  - **In-Memory**: Implemented `inFlightNotificationClaims: Set<string>` to guarantee that concurrent in-process dispatcher sweeps never claim or send the same item twice.
 
-### Review hardening (fixes after the code review)
-- **Payment binding**: a browser-reported payment can only confirm the appointment and patient it was created for, with a signature over OUR order, and the gateway must report the full fee as paid (`src/lib/payments/binding.ts`). A forged confirmation now returns "Payment verification failed."
-- **Mock gateway lockdown**: no fixed "always valid" signatures; the mock never runs in production (the app fails closed without Razorpay keys); simulated payments are signed on the server, so no secret ships to the browser.
-- **Honest refunds** (`src/lib/payments/refunds.ts`): a refund is recorded first, sent to the gateway, and only marked processed when the gateway says so. History and receipt show *Refund in progress / Refunded / Refund failed*. Refunds are idempotent, capped to the amount paid, retried when stuck, and recorded before the cancellation completes.
-- **Refund webhooks** match by Razorpay payment/refund id; `refund.created` is not "processed"; partial refunds give `PARTIALLY_REFUNDED`; refunds made from the Razorpay dashboard are recorded.
-- **Retry-safe webhooks**: a failed event answers 5xx and is reprocessed on re-delivery instead of being lost. A failed attempt no longer frees the seat (the customer may retry on the same order).
-- **Late and cancelled payments**: a late payment whose slot was taken is refunded in full; paying after cancelling the hold refunds instead of re-booking; the expiry sweep never invents payment ids and uses the shared repository.
-- **One live hold per patient** (double-click safe); cron endpoints require `CRON_SECRET` in production.
-- **Emails**: confirmation/refund emails use templates that exist (they previously fell back to a generic message), HTML is escaped, cancellation emails go to the patient (not whoever cancelled), and names/phone prefill are the patient's own.
+### 2.4 Resiliency & Fail-Closed Delivery
+- Central creation gatekeeper `createNotification` (`src/lib/notifications/create.ts`):
+  - Wraps all notification creation in safe `try/catch`. Notification failures NEVER throw into booking, payment, or cancellation flows.
+  - Gated by `shouldSend(category, preferences)`.
+  - Enforces dedupe key uniqueness in both PostgreSQL and in-memory repositories.
+- Dispatcher Retries & Backoff (`src/lib/notifications/dispatcher.ts`):
+  - 3 delivery attempts with exponential-like backoff (5m, 15m).
+  - Status transitions to `FAILED` after 3 failed attempts, capturing sanitized `lastError`.
+  - Once marked `SENT`, an item is never resent.
+- Fail Closed in Production:
+  - When `NODE_ENV === "production"` and `RESEND_API_KEY` is missing, `EmailChannel` fails closed (returns `success: false`). Messages remain `PENDING` or `FAILED`; they are NEVER falsely logged as `SENT`.
 
-## Run the Task 4 app
-Inside this `Task_4` folder:
+### 2.5 Clinical Privacy Enforcement (`src/lib/notifications/templates.ts`)
+- **Key Redaction**: Forbidden clinical keys (`diagnosis`, `symptoms`, `clinicalNotes`, `notes`, `reasonForVisit`, `medicalHistory`, `prescription`, `vitalSigns`) are strictly filtered out of email payloads.
+- **Cancellation Reason Sanitization**: Non-clinical reasons are validated against `ALLOWED_NON_CLINICAL_REASONS` (e.g. "Doctor emergency", "Schedule conflict", "Facility maintenance"). Any unapproved free-text is discarded.
+- **XSS Protection**: HTML entities are strictly escaped in HTML email bodies.
+- **Email Masking**: Recipient emails are masked (`a***@domain.com`) on admin dashboards and in production console channels.
+
+### 2.6 User Preferences & 1-Click Unsubscribe
+- **Settings Page** (`/settings`):
+  - Added "Notification Preferences" card accessible to both patients and doctors.
+  - Displays clear explanation that operational emails are mandatory.
+  - Provides toggle for optional promotional health updates with audit tracking (`consentedAt`).
+- **Unsubscribe Token & Route** (`/unsubscribe`):
+  - Cryptographically signed HMAC-SHA256 expiring token (`src/lib/notifications/unsubscribe-token.ts`).
+  - Constant-time signature verification (`crypto.timingSafeEqual`) preventing timing attacks.
+  - Rejects expired and tampered tokens with friendly UI.
+
+### 2.7 Dead-Letter Monitoring & Admin Dashboard
+- Route `/admin/notifications`:
+  - Protected by `ADMIN_EMAILS` check; returns `notFound()` (404) for unauthorized users.
+  - Displays outbox metrics (Sent, Pending, Failed, Cancelled).
+  - Displays Failed / Dead-Letter queue with masked recipient, attempt count, last error, and IST timestamps.
+  - Provides "Retry" button calling `requeueNotificationAction(id)` to reset status to `PENDING` with 0 attempts for immediate re-delivery.
+  - Provides "Sweep Due Outbox" trigger button for manual outbox dispatch.
+
+---
+
+## 3. How to Verify
+
+Run all automated verification test suites:
 ```bash
-npm install
-```
-```bash
+# 1. Automated test suite (all 3 test suites: clinical, payment hardening, and reliable notifications)
 npm test
-```
-```bash
+
+# 2. Code quality & linting
+npm run lint
+
+# 3. Production optimized bundle build
 npm run build
 ```
-```bash
-npm run dev
-```
-
-## Files
-Compared with [`Task_3`](../Task_3).
-
-### Added in review hardening
-`src/lib/payments/binding.ts`, `refunds.ts`, `finalize.ts`, `labels.ts`, `src/lib/background.ts`, `src/lib/cron-auth.ts`, `src/test-payment-hardening.ts` (72 regression tests; `npm test` runs both suites)
-
-### Added (18)
-- Migrations: `src/db/migrations/0003_narrow_doctor_octopus.sql`, `meta/0003_snapshot.json`
-- Seat Occupancy: `src/lib/seat-occupancy.ts`
-- Payments: `src/lib/payments/types.ts`, `src/lib/payments/mock-provider.ts`, `src/lib/payments/razorpay-provider.ts`, `src/lib/payments/index.ts`, `src/lib/payments/expire.ts`
-- Refund Policy: `src/lib/refund-policy.ts`
-- Notifications: `src/lib/notifications/types.ts`, `src/lib/notifications/templates.ts`, `src/lib/notifications/console-channel.ts`, `src/lib/notifications/email-channel.ts`, `src/lib/notifications/dispatcher.ts`, `src/lib/notifications/reminders.ts`, `src/lib/notifications/index.ts`
-- Routes & Pages:
-  - `src/app/api/webhooks/razorpay/route.ts`
-  - `src/app/api/cron/payments/route.ts`
-  - `src/app/api/cron/notifications/route.ts`
-  - `src/app/patient/payments/page.tsx`
-  - `src/app/patient/payments/[id]/receipt/page.tsx`
-  - `src/app/patient/payments/[id]/receipt/print-button.tsx`
-- Scripts: `scripts/simulate-webhook.ts`
-
-### Modified (8)
-- `.env.example`
-- `README.md`
-- `src/actions/appointments.ts`
-- `src/app/patient/dashboard/page.tsx`
-- `src/app/patient/dashboard/patient-appointment-actions.tsx`
-- `src/components/clinical-shell.tsx`
-- `src/components/slot-picker.tsx`
-- `src/db/migrations/meta/_journal.json`
-- `src/db/repo.ts`
-- `src/db/schema.ts`
-- `src/test-suite.ts`
+Result: **268 passing automated tests, 0 lint warnings, 0 build errors**.

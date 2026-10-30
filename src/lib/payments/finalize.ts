@@ -1,7 +1,6 @@
 import type { MedrellaRepository, AppointmentEntity, PaymentEntity } from "@/db/repo";
-import crypto from "crypto";
 import { formatPaise } from "./index";
-import { scheduleAppointmentReminders } from "@/lib/notifications";
+import { createNotification, scheduleAppointmentReminders } from "@/lib/notifications";
 
 /**
  * Everything that follows a paid, confirmed booking: the confirmation + receipt emails and the
@@ -31,31 +30,23 @@ export async function finalizeConfirmedBooking(
     amountFormatted: formatPaise(payment.amountPaise),
   };
 
-  await repo.createNotification({
-    id: `notif-${crypto.randomUUID()}`,
+  await createNotification(repo, {
     userId: user.id,
     appointmentId: appointment.id,
     channel: "EMAIL",
     template: "BOOKING_CONFIRMED",
     recipient: user.email,
     payload: base,
-    status: "PENDING",
-    scheduledFor: new Date(),
-    attempts: 0,
     dedupeKey: `confirm-${appointment.id}`,
   });
 
-  await repo.createNotification({
-    id: `notif-${crypto.randomUUID()}`,
+  await createNotification(repo, {
     userId: user.id,
     appointmentId: appointment.id,
     channel: "EMAIL",
     template: "PAYMENT_CONFIRMED",
     recipient: user.email,
     payload: { ...base, paymentId: payment.providerPaymentId ?? undefined },
-    status: "PENDING",
-    scheduledFor: new Date(),
-    attempts: 0,
     dedupeKey: `payment-confirmed-${payment.id}`,
   });
 
