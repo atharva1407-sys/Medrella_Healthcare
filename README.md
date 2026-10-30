@@ -1,134 +1,109 @@
-# Task 4: Medrella Healthcare — Razorpay (Test Mode) Payments, Refunds & Notifications
+# Medrella Healthcare
 
-A full-stack clinical outpatient management platform built for **Pearl Thoughts (Task 4)**. Extends the Medrella appointment system with a **complete Razorpay TEST mode payment system** (no real money), seat holds, automatic and tiered refunds, and an email notification outbox with appointment reminders.
+Outpatient hospital appointment and clinical scheduling platform for **Medrella Healthcare, Ruby Hall, Pune**.
+Patients find a specialist, pick an open OPD slot, pay the consultation fee online and get a confirmed appointment. Doctors manage their sessions, leave and queue from their own dashboard.
 
----
+**Live app:** https://medrella-healthcare.vercel.app
 
-## 🚀 What's New in Task 4
-
-### 1. Payment Provider Abstraction (`src/lib/payments/`)
-- **`PaymentProvider` Interface**: Generic contract supporting `createOrder`, `verifyCheckoutSignature`, `verifyWebhook`, `fetchOrder`, and `createRefund`.
-- **`RazorpayProvider`**: Official Razorpay integration using pure `fetch` with HTTP Basic Authentication and constant-time HMAC-SHA256 signature verification (`crypto.timingSafeEqual`).
-- **`MockProvider`**: Deterministic in-memory payment provider used automatically whenever `RAZORPAY_KEY_ID` is unset and throughout automated test suites.
-- **Provider Resolver**: `getPaymentProvider()` dynamically chooses between Razorpay and Mock without altering booking or cancellation code.
-
-### 2. Money & Server-Side Security
-- **Integer Paise Everywhere**: All financial calculations use integer paise (`paise = rupees * 100`, currency `INR`).
-- **Strict Server Authority**: The consultation fee is **always read directly from `doctors.consultationFee`** in the database; client-supplied fee amounts are ignored.
-- **Complimentary Visits**: Doctors with `consultationFee === 0` bypass the payment gateway and book directly with instant confirmation.
-
-### 3. Seat Holds & Shared Occupancy (`src/lib/seat-occupancy.ts`)
-- **10-Minute Seat Hold**: Booking creates an appointment with status `PENDING_PAYMENT` and `holdExpiresAt = now + PAYMENT_HOLD_MINUTES` inside a PostgreSQL transaction advisory lock (`pg_advisory_xact_lock`).
-- **Unified Seat Occupancy**: `appointmentOccupiesSeat()` and `occupiesSeatSql()` enforce that an appointment occupies capacity if it is `BOOKED`, `COMPLETED`, `NO_SHOW`, OR `PENDING_PAYMENT` with an unexpired hold. Expired holds immediately free their seat without requiring a database sweep.
-- Grep verified across: `createAppointment`, `rescheduleAppointment`, `computeSessionGroups`, `buildSessionSlotGroups`, `getNextOpenSlots`, duplicate booking checks, doctor leave blocking, and queue triage boards.
-
-### 4. Dual Confirmation Paths & Idempotency
-- **Path 1 (Browser Return)**: `verifyPaymentAndConfirmBookingAction` verifies the checkout HMAC signature with `timingSafeEqual`, marking the payment `PAID` and appointment `BOOKED` in one transaction.
-- **Path 2 (Webhook `POST /api/webhooks/razorpay`)**: Reads the raw request body with `request.text()`, verifies `x-razorpay-signature`, inserts the event into `payment_events` first for idempotency (duplicate event ID returns `200 OK` immediately), and processes `payment.captured`, `payment.failed`, `refund.processed`, and `refund.failed`.
-- Both confirmation paths converge safely regardless of which arrives first.
-
-### 5. Robust Edge Case Handling
-- **Late Payment After Hold Expiry**: If a payment arrives after the 10-minute hold has expired:
-  - If the slot is still free: Re-confirms the appointment as `BOOKED`.
-  - If the slot was taken by another patient: Leaves the appointment as `EXPIRED`, marks the payment `PAID`, and **automatically initiates a 100% refund** with an email notification to the patient.
-- **Failed Payment**: Marks payment `FAILED`, releases the hold, and allows the patient to retry.
-- **Tampered Amount & Forged Signatures**: Strictly detected and rejected.
-- **Concurrent Races**: Advisory transaction lock prevents two patients from claiming the last wave seat simultaneously.
-
-### 6. Tiered Refund Policy (`src/lib/refund-policy.ts`)
-- Pure, unit-tested refund engine:
-  - **Patient cancels ≥ 24h prior to visit**: 100% refund.
-  - **Patient cancels 2h – 24h prior**: 50% refund.
-  - **Patient cancels < 2h prior**: 0% refund.
-  - **Doctor cancels (any notice)**: 100% refund.
-  - **No-Show**: 0% refund.
-  - **Reschedule**: Free (retains original payment).
-- **Balance Capping**: A refund can never exceed `paidAmount - alreadyRefunded`.
-- **Deterministic Idempotency**: `buildRefundIdempotencyKey(paymentId, appointmentId, purpose)` prevents duplicate refund execution on retries.
-- **Refund Preview**: Live refund calculation modal shows the exact rupee amount to the user **before** cancellation confirmation.
-
-### 7. Notification Outbox Pattern (`src/lib/notifications/`)
-- Outbox table `notifications` stores pending email items in the same transaction as clinical state transitions.
-- **Channel Fallback**: `EmailChannel` sends via Resend (`RESEND_API_KEY`). When unset, `ConsoleChannel` logs emails and marks them `SENT` so local dev and testing work with zero keys.
-- **Pre-Send Recheck**: Before sending reminders, checks the appointment status in the database; if cancelled, completed, or expired, the reminder is cancelled on the spot.
-- **Automated Reminders**: Schedules reminders at 1440m (24 hours) and 120m (2 hours) before visit. Rescheduling automatically cancels old reminders and schedules new ones.
-- **Dispatcher Endpoint**: `GET /api/cron/notifications` processes due notifications.
-
-### 8. Expiry Sweep & Reconciliation
-- **`GET /api/cron/payments`**: Sweeps expired holds, checks live order status from the gateway to reconcile late payments, and marks abandoned holds `EXPIRED`. Protected by `CRON_SECRET`.
-- **Opportunistic Sweeping**: Runs when patients view their dashboard.
+> Payments run in **Razorpay test mode**. No real money is charged. Use Razorpay's published test cards.
 
 ---
 
-## 💻 UI & Patient Experience
+## Features
 
-1. **Conflict-Proof Slot Picker (`/doctors/[id]`)**:
-   - "Pay ₹{fee} & Book" button.
-   - Prominent **Razorpay Test Mode** indicator (`rzp_test_`).
-   - 10-minute hold countdown timer with live warning.
-   - Test mode checkout modal with simulation controls ("Simulate Success", "Simulate Failure").
-2. **Patient Dashboard (`/patient/dashboard`)**:
-   - Appointment badges show payment status ("Paid (rzp_test)", "Complimentary").
-   - Cancellation modal displays real-time **Ruby Hall Refund Preview** with percentage, rupee amount, and policy rules.
-3. **Payments & Billing (`/patient/payments`)**:
-   - Comprehensive audit log of all transactions, receipts, and refund statuses.
-4. **Printable Consultation Receipt (`/patient/payments/[id]/receipt`)**:
-   - Official Ruby Hall Clinic receipt with patient ID, doctor license, token number, financial breakdown, and browser print action.
+### For patients
+- Sign up and sign in with secure, signed session cookies
+- Browse specialists on the landing page, with each doctor's next open slot
+- Book a slot in a doctor's OPD session (stream and wave scheduling with token numbers)
+- Pay online: the booking is held for 10 minutes while you pay
+- Reschedule an appointment, or cancel it with a live refund preview before you confirm
+- See payment history, receipts and refund status
+- Receive emails for booking, payment, cancellation, refunds and reminders
+
+### For doctors
+- Dashboard with today's appointments and the patient queue
+- Weekly availability, multiple OPD sessions per day and session capacity
+- Clinical leave management, with protection against leaving on days that already have bookings
+
+### Payments and refunds
+- Razorpay (test mode) behind a provider interface, so other gateways can be added
+- Fees always come from the database; amounts from the browser are ignored
+- Checkout signature and webhook signature are verified on the server
+- Webhook events are stored and processed once, even if Razorpay sends them again
+- Seat holds expire safely, and late payments are confirmed or refunded automatically
+- Refund policy: 100% if cancelled 24h or more before, 50% from 2h to 24h before, 0% under 2h; 100% if the doctor cancels
+- A refund shows as "Refunded" only once the gateway confirms it
+
+### Notifications
+- Email via Resend (console output when no key is set)
+- Reminders 24h and 2h before the visit; changed or removed automatically on reschedule and cancel
+- Retries on failure and no duplicate messages
 
 ---
 
-## 🗄️ Database Schema & Migrations
+## Tech stack
 
-### Migration `0003_narrow_doctor_octopus.sql`
-Adds the following tables and columns:
-- `payments`: `id`, `appointment_id`, `patient_id`, `provider`, `provider_order_id`, `provider_payment_id`, `amount_paise`, `currency`, `status`, `receipt_no`, `failure_reason`, `expires_at`, `paid_at`, timestamps. Unique indexes on `(provider, provider_order_id)` and `(provider, provider_payment_id)`.
-- `payment_events`: `id`, `provider`, `provider_event_id`, `type`, `payload`, `outcome`, `processed_at`. Unique on `(provider, provider_event_id)` for webhook idempotency.
-- `refunds`: `id`, `payment_id`, `appointment_id`, `amount_paise`, `reason`, `status`, `provider_refund_id`, `idempotency_key`, `failure_reason`, timestamps. Unique on `idempotency_key`.
-- `notifications`: `id`, `user_id`, `appointment_id`, `channel`, `template`, `recipient`, `payload`, `status`, `scheduled_for`, `attempts`, `last_error`, `dedupe_key`, `sent_at`.
-- `appointments`: Added `PENDING_PAYMENT` and `EXPIRED` statuses, `hold_expires_at`, `cancelled_by`, and `cancel_reason`.
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router), React 19, TypeScript |
+| Styling | Tailwind CSS 4 |
+| Database | PostgreSQL on Neon |
+| ORM | Drizzle ORM |
+| Validation | Zod |
+| Auth | Signed HTTP-only session cookies, PBKDF2 password hashing |
+| Payments | Razorpay (test mode) |
+| Email | Resend |
+| Hosting | Vercel |
 
-### Applying Migration 0003 to Neon:
-To apply migration 0003 to your Neon database branch, run:
+---
+
+## Run it locally
+
 ```bash
-npx drizzle-kit migrate --config=src/db/drizzle.config.ts
-```
-*(Or run `npx drizzle-kit push` if your Neon branch is managed without a migration history table).*
-
----
-
-## 🧪 Verification & Testing
-
-The verification test suite covers 115 test cases with 100% pass rate:
-```bash
-npm test
-```
-To run offline against the in-memory repository (never touching Neon):
-```bash
-powershell -Command "$env:DATABASE_URL='disabled-for-local-test'; npm test --prefix Task_4"
+npm install
+cp .env.example .env.local   # then fill in the values
+npm run dev
 ```
 
-### Verification Checklist:
-- ✅ TypeScript typecheck passes (`tsc --noEmit` - 0 errors)
-- ✅ ESLint passes (`npm run lint` - 0 warnings)
-- ✅ Next.js 16 Turbopack production build succeeds (`npm run build`)
-- ✅ All 87 baseline clinical tests pass
-- ✅ 28 new tests for Task 4 payment holds, signature verification, webhook idempotency, auto-refunds, and reminder lifecycles pass
+Open http://localhost:3000.
+
+To try the app without a database or payment keys, set `DATABASE_URL="disabled-for-local-test"` and `USE_MOCK_PAYMENTS=true`. This uses seeded in-memory data and a mock payment gateway (development only).
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Neon PostgreSQL connection string |
+| `SESSION_SECRET` | Secret used to sign session cookies |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Razorpay test keys (required in production) |
+| `RAZORPAY_WEBHOOK_SECRET` | Secret for verifying Razorpay webhooks |
+| `CRON_SECRET` | Protects the `/api/cron/*` endpoints |
+| `PAYMENT_HOLD_MINUTES` | Seat hold length (default 10) |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Email sending (optional) |
+
+### Useful scripts
+
+| Command | What it does |
+|---|---|
+| `npm test` | Runs the automated test suites |
+| `npm run build` | Production build |
+| `npm run db:push` | Applies the schema to an empty database |
+| `npm run db:migrate-0003` | Adds the payments and notifications tables to an existing database |
+| `npm run db:seed` | Seeds doctors |
 
 ---
 
-## 🛠️ Testing Webhooks Locally
+## Deploying
 
-Use the simulation script to test webhooks on localhost:
-```bash
-# Simulate successful captured payment
-npx tsx scripts/simulate-webhook.ts captured [orderId] [paymentId]
+1. Create a Neon database and set `DATABASE_URL`.
+2. Apply the schema (`npm run db:push`, or `npm run db:migrate-0003` on an existing database).
+3. Add the environment variables above in Vercel and deploy.
+4. In the Razorpay dashboard, add a webhook to `https://<your-domain>/api/webhooks/razorpay` using the same secret as `RAZORPAY_WEBHOOK_SECRET`. Select the payment and refund events.
 
-# Simulate bank payment failure
-npx tsx scripts/simulate-webhook.ts failed [orderId] [paymentId]
+Production refuses to take payments if the Razorpay keys are missing. The mock gateway never runs in production.
 
-# Simulate processed refund
-npx tsx scripts/simulate-webhook.ts refund [orderId] [paymentId]
+---
 
-# Simulate forged signature (rejected with 400)
-npx tsx scripts/simulate-webhook.ts tampered [orderId] [paymentId]
-```
+## Project history
+
+Built task by task for Pearl Thoughts: ER design, app foundation, the appointment platform, and payments with refunds and notifications. Each task folder and its notes live in the task repository: https://github.com/atharva1407-sys/Pearl_Thoughts_Atharva-Mandlik
