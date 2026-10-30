@@ -2,8 +2,6 @@
 
 A Next.js 16 (App Router, React 19, TypeScript, Tailwind 4) outpatient appointment platform with Drizzle ORM on Neon PostgreSQL.
 
-**Live app:** https://medrella-healthcare.vercel.app
-
 **Task 5 focuses on Reliable Appointment Notifications (EMAIL ONLY)**. The finished system sends the right email for every appointment event, schedules reminders accurately in Indian Standard Time (`Asia/Kolkata`), eliminates duplicate and stale messages, retries failures with exponential backoff, provides patient preference controls, enforces strict clinical data privacy, and ensures a notification delivery failure never breaks clinical bookings or cancellations.
 
 ---
