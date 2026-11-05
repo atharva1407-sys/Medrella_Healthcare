@@ -12,6 +12,8 @@ import type { MockProvider } from "@/lib/payments";
 import { checkPaymentBinding, checkOrderSettled } from "@/lib/payments/binding";
 import { prepareRefund, executeRefund, issueRefund } from "@/lib/payments/refunds";
 import type { PreparedRefund } from "@/lib/payments/refunds";
+import { cancelPreauthForAppointment } from "@/lib/insurance/service";
+import { buildInstantFromKolkataTime } from "@/lib/time";
 import { finalizeConfirmedBooking } from "@/lib/payments/finalize";
 import { computeRefund } from "@/lib/refund-policy";
 import {
@@ -23,7 +25,6 @@ import {
 } from "@/lib/notifications";
 import { runInBackground } from "@/lib/background";
 
-import { buildInstantFromKolkataTime } from "@/lib/time";
 /** The patient record that a signed-in user pays and books as (doctors may book as themselves). */
 async function resolvePayingPatientId(user: { role: string; profileId: string; userId: string }): Promise<string | undefined> {
   if (user.role === "PATIENT") return user.profileId;
@@ -740,6 +741,8 @@ export async function cancelAppointmentAction(appointmentId: string) {
 
   // Cancel any pending reminders
   await cancelAppointmentReminders(dbRepo, appointmentId);
+  // An open or approved insurance pre-authorisation is no longer valid.
+  await cancelPreauthForAppointment(dbRepo, appointmentId);
 
   // Now ask the gateway. The refund is only "processed" if the gateway says so.
   let refundMessage = "";

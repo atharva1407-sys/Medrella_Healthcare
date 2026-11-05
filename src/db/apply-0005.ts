@@ -13,7 +13,7 @@ async function main() {
     process.exit(1);
   }
 
-  const migrationPath = path.join(__dirname, "migrations", "0005_scheduling_dates.sql");
+  const migrationPath = path.join(__dirname, "migrations", "0005_agent_insurance.sql");
   if (!fs.existsSync(migrationPath)) {
     console.error(`❌ Migration file not found at: ${migrationPath}`);
     process.exit(1);
@@ -26,7 +26,7 @@ async function main() {
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
-  console.log(`🚀 Connecting to Neon PostgreSQL and applying the scheduling migration (${statements.length} statements)...`);
+  console.log(`🚀 Connecting to Neon PostgreSQL and applying migration 0005 (${statements.length} statements)...`);
   const host = new URL(connectionString).hostname;
   console.log(`   Target database host: ${host.split(".")[0]} (check this is the database you intend to change)`);
   const pool = new Pool({ connectionString });
@@ -46,7 +46,7 @@ async function main() {
         }
       }
     }
-    console.log("🎉 Scheduling migration applied successfully to Neon database!");
+    console.log("🎉 Migration 0005 applied successfully to Neon database!");
   } finally {
     await pool.end();
   }

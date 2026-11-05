@@ -207,6 +207,62 @@ Get started: ${nextLink}${footerText}`;
       return { subject, bodyText, bodyHtml };
     }
 
+    case "PREAUTH_UPDATE":
+    case "CLAIM_UPDATE": {
+      const isClaim = item.template === "CLAIM_UPDATE";
+      const what = isClaim ? "Insurance Claim" : "Cashless Pre-Authorisation";
+      const status = String(p.statusLabel || "UPDATED").replace(/_/g, " ").toLowerCase();
+      const ref = p.reference || "N/A";
+      const noteText = p.note ? `
+Note: ${p.note}` : "";
+      const noteHtml = p.note ? `<p><b>Note:</b> ${p.note}</p>` : "";
+      const subject = `${what} Update: ${status} (Ref ${ref})`;
+      const bodyText = `Hello ${patient},
+
+Your ${what.toLowerCase()} for the consultation with Dr. ${doctor} on ${date} is now ${status}.
+Amount: ${fee || "N/A"}
+Reference: ${ref}${noteText}
+
+View details: ${appUrl}/patient/insurance${footerText}`;
+      const bodyHtml = `<h3>${what} Update</h3><p>Hello <b>${patient}</b>,</p><p>Your ${what.toLowerCase()} for the consultation with <b>Dr. ${doctor}</b> on <b>${date}</b> is now <b>${status}</b>.</p><p><b>Amount:</b> ${fee || "N/A"}<br/><b>Reference:</b> <code>${ref}</code></p>${noteHtml}<p><a href="${appUrl}/patient/insurance" style="background:#0875df;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;display:inline-block;font-size:12px;font-weight:bold;">View Insurance</a></p>${footerHtml}`;
+      return { subject, bodyText, bodyHtml };
+    }
+
+    case "FOLLOW_UP_VISIT": {
+      const subject = `How are you feeling after your visit with Dr. ${doctor}?`;
+      const bodyText = `Hello ${patient},
+
+Thank you for visiting Dr. ${doctor} on ${date}. If you need a follow-up consultation, you can book a slot at any time.
+
+Book a follow-up: ${appUrl}/doctors
+
+If you feel unwell or this is an emergency, please call your local emergency number or visit the nearest hospital.${footerText}`;
+      const bodyHtml = `<h3>Checking in after your visit</h3><p>Hello <b>${patient}</b>,</p><p>Thank you for visiting <b>Dr. ${doctor}</b> on <b>${date}</b>. If you need a follow-up consultation, you can book a slot at any time.</p><p><a href="${appUrl}/doctors" style="background:#0875df;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;display:inline-block;font-size:12px;font-weight:bold;">Book a Follow-up</a></p><p style="font-size:12px;color:#64748b;">If you feel unwell or this is an emergency, please call your local emergency number or visit the nearest hospital.</p>${footerHtml}`;
+      return { subject, bodyText, bodyHtml };
+    }
+
+    case "CARE_REMINDER": {
+      const subject = "A gentle reminder to look after your health";
+      const bodyText = `Hello ${patient},
+
+It has been a while since your last check-up. Regular check-ups help you stay on top of your health.
+
+Find a doctor: ${appUrl}/doctors${footerText}`;
+      const bodyHtml = `<h3>Time for a check-up?</h3><p>Hello <b>${patient}</b>,</p><p>It has been a while since your last check-up. Regular check-ups help you stay on top of your health.</p><p><a href="${appUrl}/doctors" style="background:#0875df;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;display:inline-block;font-size:12px;font-weight:bold;">Find a Doctor</a></p>${footerHtml}`;
+      return { subject, bodyText, bodyHtml };
+    }
+
+    case "REENGAGEMENT": {
+      const subject = "We would love to see you again at Medrella";
+      const bodyText = `Hello ${patient},
+
+We have not seen you for a while. Our specialists at Ruby Hall Clinic are here whenever you need care.
+
+Book an appointment: ${appUrl}/doctors${footerText}`;
+      const bodyHtml = `<h3>We miss you</h3><p>Hello <b>${patient}</b>,</p><p>We have not seen you for a while. Our specialists at Ruby Hall Clinic are here whenever you need care.</p><p><a href="${appUrl}/doctors" style="background:#0875df;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;display:inline-block;font-size:12px;font-weight:bold;">Book an Appointment</a></p>${footerHtml}`;
+      return { subject, bodyText, bodyHtml };
+    }
+
     case "PROMOTIONAL_NEWSLETTER":
     case "PROMOTIONAL_HEALTH_TIP": {
       const subject = p.customSubject || `Medrella Health Bulletin: Wellness & Care Advice`;

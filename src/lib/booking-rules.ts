@@ -1,7 +1,7 @@
 import { dbRepo, dayOfWeekFor, toLocalDateString, type AvailabilityEntity, type DoctorEntity } from "@/db/repo";
-
 import { buildInstantFromKolkataTime, istMinutesOfDay } from "./time";
 import { formatDateLabel, sessionAppliesOnDate } from "./session-schedule";
+
 export const MAX_BOOKING_DAYS_AHEAD = 30;
 export const MIN_BOOKING_NOTICE_MINUTES = 15;
 

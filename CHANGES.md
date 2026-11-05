@@ -1,8 +1,76 @@
-> **Addendum: Wave & Stream scheduling completed.** Sessions can now repeat every week, on a date of the month (1-31), or run on **one date only**; recurring ones can have an optional "runs from / until" range; **patients per slot (1-20) is configurable for Stream as well as Wave**, a session can be **one slot for the whole window** (for example 10:00-12:00 with 20 patients), and one-date sessions can be created on several dates at once. A doctor's overlapping sessions are refused only when they share a date.
-> Code: `src/lib/session-schedule.ts` (rules), `src/db/repo.ts`, `src/lib/booking-rules.ts`, `src/app/doctor/availability/sessions-client.tsx`. Tests: `src/test-scheduling.ts` (114 checks, chained into `npm test`).
-> Database: migration `0005_scheduling_dates.sql` is additive (existing sessions default to weekly). Apply it to an existing database with `npm run db:migrate-scheduling` **before** deploying this code.
+# Task 6 — Wave & Stream scheduling completed (dates, recurrence, Stream capacity)
+
+Closes the three gaps in the "Wave & Stream Scheduling Implementation" brief. Wave and Stream sessions already existed (weekly, per-session slot length, Wave capacity). Now:
+
+| Brief item | Before | Now |
+|---|---|---|
+| Non-recurring, specific date | Not possible | **"One date only"** session: runs on exactly one calendar date and never repeats. Past dates and impossible dates (30 Feb) are refused. |
+| Recurring by day | Weekly only, forever | Weekly **plus an optional "runs from / until" date range** (for example every Monday, 1 Dec to 31 Dec). |
+| Recurring by date | Not possible | **"Date of month"** session (1–31, for example the 1st of every month) with the same optional range. Months without that date (31st in June) are skipped. |
+| Stream capacity | Fixed at 1 | **Patients per slot (1–20) is configurable for Stream as well as Wave.** Capacity is enforced at booking, reschedule and late-payment reconciliation. |
+
+## How it works
+
+| Area | Change |
+|---|---|
+| Rules | New pure module `src/lib/session-schedule.ts`: `sessionAppliesOnDate`, `firstSharedDate`, validation, descriptions. Everything (slot engine, booking gate, landing page, agent, UI) asks this one module whether a session runs on a date. |
+| Database | Migration `0006_scheduling_dates.sql` (additive): `availabilities.recurrence` (default `WEEKLY`, so every existing session keeps working), `day_of_month`, `specific_date`, `valid_from`, `valid_until`; `day_of_week` becomes nullable (monthly sessions have no weekday). Apply with `npm run db:migrate-0006`. |
+| Overlap rule | Two sessions of one doctor clash only if their hours overlap **and** they can run on a common date (weekly vs one-off, monthly vs weekly, disjoint date ranges are fine). Inactive sessions never clash. |
+| Doctor form | "When does it run?" (Every week / Date of month / One date only), optional from/until dates, slot length 10–120 min, Stream or Wave, **Patients per slot**. Roster shows weekly days, monthly dates and one-date sessions separately and marks ended ones. |
+| Several dates at once | In the one-date form, "Same session on more dates" creates one session per date. Every date is checked first, so if any clashes nothing is created. |
+| Arrival window (Stream) | "One slot for the whole session" makes the session a single slot (slot length up to 10 hours), for example 10:00–14:00 with 20 patients per slot, seen in token order. This is the "window with a total capacity" reading of Stream. |
+| Patients | Slot picker, reschedule dialog and the assistant show seats left for any slot with capacity above 1. Doctor profile lists weekdays, monthly dates and the number of special dates. |
+| Tests | `src/test-scheduling.ts`: 114 checks in memory (116 against a real Postgres engine), re-run under three server timezones, chained into `npm test`. Loops over 40–75 consecutive days to prove each kind of session appears on exactly the right dates. |
+
+Deploying this change: run `npm run db:migrate-0006` against the database **before** deploying the new code.
+
+**Verification beyond the in-memory tests:** the same scheduling suite, the migration (applied on top of an old-style row) and the Postgres booking, reschedule and session queries were run against a real Postgres engine (PGlite). The doctor form, a patient's slot list and a full mock-paid booking (token issued, seats left updated) were also checked in the browser.
+
+**Same change in Tasks 3, 4 and 5:** each has its own migration (`0003`, `0004`, `0005_scheduling_dates.sql`) applied with `npm run db:migrate-scheduling`.
+
+**Copying this into the deployment repo** (only valid if that repo is already at the Task 6 state): copy `src/lib/session-schedule.ts`, `src/db/schema.ts`, `src/db/repo.ts`, `src/lib/booking-rules.ts`, `src/lib/validators.ts`, `src/actions/availability.ts`, `src/app/doctor/availability/sessions-client.tsx`, `src/app/doctor/dashboard/page.tsx`, `src/app/doctors/[id]/page.tsx`, `src/components/slot-picker.tsx`, `src/components/reschedule-modal.tsx`, `src/db/migrations/0006_scheduling_dates.sql`, `src/db/migrations/meta/*`, `src/db/apply-0006.ts`, `src/test-scheduling.ts`, plus the `db:migrate-0006` and `test` lines of `package.json`. Then run `npm run db:migrate-0006` on the live database before redeploying.
+
+---
+
+# Task 6 — Healthcare Agent (changes from Task 5)
+
+## What was added
+
+| Area | Change |
+|---|---|
+| Agent | `src/lib/agent/`: Sarvam client (`llm.ts`), safety checks (`safety.ts`), prompt (`prompt.ts`), tools (`tools.ts`), agent loop (`agent.ts`); API route `POST /api/agent/chat` |
+| Chat UI | `/patient/assistant` (shadcn components), "Assistant" entry in the patient navigation |
+| Booking hand-off | `/doctors/[id]?date=YYYY-MM-DD&slot=HH:mm` opens the booking page with that date and slot pre-selected |
+| Insurance | `src/lib/insurance/` (provider interface, simulated insurer, service), actions in `src/actions/insurance.ts`, page `/patient/insurance`, emails `PREAUTH_UPDATE` and `CLAIM_UPDATE` |
+| Engagement | `src/lib/engagement/`, cron `GET /api/cron/engagement`, emails `FOLLOW_UP_VISIT` (operational), `CARE_REMINDER` and `REENGAGEMENT` (promotional, opt-in) |
+| Database | Migration `0005_agent_insurance.sql` (additive only): `agent_events`, `insurance_policies`, `preauth_requests`, `claims`. Apply with `npm run db:migrate-0005`. |
+| Cancellation | Cancelling an appointment now also cancels its open or approved insurance pre-authorisation |
+| Tests | `src/test-agent.ts` (95 checks), chained into `npm test` |
+
+## Event and message map (new)
+
+| Trigger | Template | Category | Dedupe key |
+|---|---|---|---|
+| Pre-authorisation status changes | `PREAUTH_UPDATE` | Operational | `preauth-<id>-<status>` |
+| Claim status changes | `CLAIM_UPDATE` | Operational | `claim-<id>-<status>` |
+| Visit completed 1–3 days ago | `FOLLOW_UP_VISIT` | Operational | `followup-<appointmentId>` |
+| Last visit ≥ 90 days ago, nothing upcoming, opted in | `CARE_REMINDER` | Promotional | `care_reminder-<patientId>-<YYYY-MM>` |
+| Last visit ≥ 180 days ago, nothing upcoming, opted in | `REENGAGEMENT` | Promotional | `reengagement-<patientId>-<YYYY-MM>` |
+
+## Simulated insurer rules
+
+Policy number ends in `0`: inactive. Starts with `LOW`: sum insured ₹500 (larger pre-auths rejected). Contains `QRY`: first status check asks for more information, the next approves. Contains `REJ`: claims are rejected. Anything else: active, ₹5,00,000 cover, 10% co-pay; pre-auth is approved on the first check; claims go IN_REVIEW then SETTLED.
+
+## Deploying
+
+1. Back up or branch the database, then run `npm run db:migrate-0005` against it **before** deploying (new code reads the new tables).
+2. Add `SARVAM_API_KEY` (and, for a demo, `INSURANCE_PROVIDER=mock`) in Vercel, then redeploy.
+3. Schedule `GET /api/cron/engagement` daily with the `CRON_SECRET` bearer header.
+
+---
 
 # Task 5 — Reliable Email Notifications (Changes from Task 4)
+
 
 This document describes all changes introduced in **Task 5 (Reliable Email Notifications)** for Medrella Healthcare.
 

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "./auth";
 import { dbRepo } from "@/db/repo";
 import { verifyUnsubscribeToken } from "@/lib/notifications/unsubscribe-token";
+import { formatNotification } from "@/lib/notifications/templates";
 
 const updatePreferencesSchema = z.object({
   emailPromotional: z.boolean(),
@@ -32,6 +33,35 @@ export async function getNotificationPreferencesAction() {
       success: false,
       error: err.message || "Failed to load notification preferences",
     };
+  }
+}
+
+export interface InboxItem {
+  id: string;
+  subject: string;
+  preview: string;
+  status: string;
+  createdAt: string;
+}
+
+/** The signed-in user's most recent messages, for the bell menu in the top bar. */
+export async function getMyNotificationsAction(): Promise<{ success: true; items: InboxItem[] } | { success: false; error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { success: false, error: "Please sign in." };
+  try {
+    const all = await dbRepo.getNotificationsByUserId(user.userId);
+    const items = all
+      .filter((n) => n.status !== "CANCELLED")
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 12)
+      .map((n) => {
+        const { subject, bodyText } = formatNotification(n);
+        const preview = bodyText.replace(/\s+/g, " ").trim().slice(0, 160);
+        return { id: n.id, subject, preview, status: n.status, createdAt: new Date(n.createdAt).toISOString() };
+      });
+    return { success: true, items };
+  } catch {
+    return { success: false, error: "Could not load messages." };
   }
 }
 
