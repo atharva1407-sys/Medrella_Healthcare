@@ -6,7 +6,6 @@ import { hashPassword } from "@/lib/auth-crypto";
 import { RUBY_HALL_SPECIALISTS, specialistSessionId, getSeedDoctorPassword } from "./specialists-catalog";
 import { seedSpecialists } from "./seed-specialists";
 import { appointmentOccupiesSeat, occupiesSeatSql } from "../lib/seat-occupancy";
-
 import { buildInstantFromKolkataTime, istDateString, istMinutesOfDay } from "../lib/time";
 import {
   firstSharedDate,
@@ -20,6 +19,7 @@ import {
   type DayCode,
   type SessionRecurrence,
 } from "../lib/session-schedule";
+
 export interface UserEntity {
   id: string;
   email: string;
@@ -187,6 +187,65 @@ export interface NotificationPreferencesEntity {
   updatedAt: Date;
 }
 
+export type AgentEventKind = "MESSAGE" | "TOOL_CALL" | "ACTION" | "ERROR";
+
+export interface AgentEventEntity {
+  id: string;
+  userId: string;
+  kind: AgentEventKind;
+  tool?: string | null;
+  detail?: string | null;
+  createdAt: Date;
+}
+
+export type InsurancePolicyStatus = "PENDING_VERIFICATION" | "ACTIVE" | "INACTIVE";
+
+export interface InsurancePolicyEntity {
+  id: string;
+  patientId: string;
+  insurerName: string;
+  policyNumber: string;
+  sumInsuredPaise: number;
+  copayPercent: number;
+  status: InsurancePolicyStatus;
+  verifiedAt?: Date | null;
+  providerReference?: string | null;
+  createdAt: Date;
+}
+
+export type PreauthStatus = "REQUESTED" | "SUBMITTED" | "QUERY" | "APPROVED" | "REJECTED" | "CANCELLED";
+
+export interface PreauthRequestEntity {
+  id: string;
+  policyId: string;
+  appointmentId: string;
+  patientId: string;
+  estimatedAmountPaise: number;
+  approvedAmountPaise?: number | null;
+  status: PreauthStatus;
+  providerReference?: string | null;
+  statusNote?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type ClaimStatus = "SUBMITTED" | "IN_REVIEW" | "SETTLED" | "REJECTED";
+
+export interface ClaimEntity {
+  id: string;
+  policyId: string;
+  appointmentId: string;
+  patientId: string;
+  preauthId?: string | null;
+  amountPaise: number;
+  settledAmountPaise?: number | null;
+  status: ClaimStatus;
+  providerReference?: string | null;
+  statusNote?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface NotificationEntity {
   id: string;
   userId: string;
@@ -234,7 +293,7 @@ export function doSessionsOverlap(
   return s1.startTime < s2.endTime && s2.startTime < s1.endTime;
 }
 
-/** YYYY-MM-DD in local time (never UTC, so early-morning IST dates don't shift a day). */
+/** YYYY-MM-DD in hospital time (Asia/Kolkata), whatever timezone the server runs in. */
 export function toLocalDateString(d: Date): string {
   return istDateString(d);
 }
@@ -410,6 +469,10 @@ export class MedrellaRepository {
   private memRefunds: RefundEntity[] = [];
   private memNotifications: NotificationEntity[] = [];
   private memNotificationPreferences: NotificationPreferencesEntity[] = [];
+  private memAgentEvents: AgentEventEntity[] = [];
+  private memPolicies: InsurancePolicyEntity[] = [];
+  private memPreauths: PreauthRequestEntity[] = [];
+  private memClaims: ClaimEntity[] = [];
   private inFlightNotificationClaims: Set<string> = new Set<string>();
 
   constructor() {
@@ -431,6 +494,10 @@ export class MedrellaRepository {
     this.memDoctorLeaves = [];
     this.memNotifications = [];
     this.memNotificationPreferences = [];
+    this.memAgentEvents = [];
+    this.memPolicies = [];
+    this.memPreauths = [];
+    this.memClaims = [];
     this.inFlightNotificationClaims = new Set<string>();
 
     const defaultPasswordHash = hashPassword(getSeedDoctorPassword({ allowDevFallback: true }));
@@ -476,6 +543,62 @@ export class MedrellaRepository {
         }
       }
     });
+
+    this.seedDemoPatients();
+  }
+
+  /**
+   * Demo-only sample patients for presentations (DEMO_DATA=true with DEMO_PATIENT_PASSWORD set).
+   * Gives the agent, insurance and engagement features something to show on a fresh in-memory start.
+   */
+  private seedDemoPatients() {
+    const password = process.env.DEMO_PATIENT_PASSWORD;
+    if (process.env.DEMO_DATA !== "true" || !password || this.memDoctors.length === 0) return;
+
+    const hash = hashPassword(password);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const daysAgo = (n: number) => istDateString(new Date(Date.now() - n * dayMs));
+    const doctor = this.memDoctors[0];
+    const patients = [
+      // Visited 2 days ago: gets a follow-up email and can file an insurance claim.
+      { key: "priya", email: "priya.demo@medrella.demo", firstName: "Priya", lastName: "Deshmukh", visitDaysAgo: 2, policy: "MEDR100201" },
+      // Last visit 100 days ago and opted in: gets a check-up reminder from the engagement job.
+      { key: "rahul", email: "rahul.demo@medrella.demo", firstName: "Rahul", lastName: "Kulkarni", visitDaysAgo: 100, policy: null },
+    ];
+
+    for (const p of patients) {
+      const userId = `demo-user-${p.key}`;
+      const patientId = `demo-patient-${p.key}`;
+      this.memUsers.push({ id: userId, email: p.email, passwordHash: hash, role: "PATIENT", isActive: true, createdAt: new Date() });
+      this.memPatients.push({ id: patientId, userId, firstName: p.firstName, lastName: p.lastName, phone: "9800000000" });
+      this.memAppointments.push({
+        id: `demo-appt-${p.key}`,
+        patientId,
+        doctorId: doctor.id,
+        appointmentDate: daysAgo(p.visitDaysAgo),
+        startTime: "10:00",
+        endTime: "10:15",
+        status: "COMPLETED",
+        tokenNumber: 1,
+        reason: "General consultation",
+        createdAt: new Date(Date.now() - (p.visitDaysAgo + 2) * dayMs),
+      });
+      this.memNotificationPreferences.push({ userId, emailPromotional: true, consentedAt: new Date(), updatedAt: new Date() });
+      if (p.policy) {
+        this.memPolicies.push({
+          id: `demo-policy-${p.key}`,
+          patientId,
+          insurerName: "Star Health (demo)",
+          policyNumber: p.policy,
+          sumInsuredPaise: 500_000_00,
+          copayPercent: 10,
+          status: "ACTIVE",
+          verifiedAt: new Date(),
+          providerReference: "demo-ref",
+          createdAt: new Date(),
+        });
+      }
+    }
   }
 
   // --- User Operations ---
@@ -1796,6 +1919,8 @@ export class MedrellaRepository {
       this.memNotifications = this.memNotifications.filter((n) => !n.appointmentId || !apptIds.has(n.appointmentId));
       this.memRefunds = this.memRefunds.filter((r) => !apptIds.has(r.appointmentId));
       this.memPayments = this.memPayments.filter((p) => !apptIds.has(p.appointmentId));
+      this.memClaims = this.memClaims.filter((c) => !apptIds.has(c.appointmentId));
+      this.memPreauths = this.memPreauths.filter((r) => !apptIds.has(r.appointmentId));
       this.memAppointments = this.memAppointments.filter((a) => a.doctorId !== d.id);
       this.memAvailabilities = this.memAvailabilities.filter((av) => av.doctorId !== d.id);
       this.memDoctorLeaves = this.memDoctorLeaves.filter((l) => l.doctorId !== d.id);
@@ -1810,6 +1935,9 @@ export class MedrellaRepository {
       );
       this.memRefunds = this.memRefunds.filter((r) => !apptIds.has(r.appointmentId));
       this.memPayments = this.memPayments.filter((pay) => !apptIds.has(pay.appointmentId));
+      this.memClaims = this.memClaims.filter((c) => c.patientId !== p.id);
+      this.memPreauths = this.memPreauths.filter((r) => r.patientId !== p.id);
+      this.memPolicies = this.memPolicies.filter((pol) => pol.patientId !== p.id);
       this.memAppointments = this.memAppointments.filter((a) => a.patientId !== p.id);
       this.memPatients = this.memPatients.filter((pat) => pat.id !== p.id);
     }
@@ -1843,6 +1971,244 @@ export class MedrellaRepository {
     this.memPaymentEvents = [];
     this.memRefunds = [];
     this.memNotifications = [];
+    this.memAgentEvents = [];
+    this.memClaims = [];
+    this.memPreauths = [];
+    this.memPolicies = [];
+  }
+
+
+  // --- Healthcare agent audit trail ---
+
+  public async createAgentEvent(input: Omit<AgentEventEntity, "createdAt">): Promise<AgentEventEntity> {
+    this.checkProductionDatabase();
+    const entry: AgentEventEntity = { ...input, createdAt: new Date() };
+    if (db) {
+      const [row] = await db.insert(schema.agentEvents).values(entry).returning();
+      return row as AgentEventEntity;
+    }
+    this.memAgentEvents.push(entry);
+    return entry;
+  }
+
+  public async getAgentEventsByUserId(userId: string, limit: number = 50): Promise<AgentEventEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.agentEvents)
+        .where(eq(schema.agentEvents.userId, userId))
+        .orderBy(desc(schema.agentEvents.createdAt))
+        .limit(limit);
+      return rows as AgentEventEntity[];
+    }
+    return this.memAgentEvents
+      .filter((e) => e.userId === userId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  // --- Insurance: policies, pre-authorisations, claims ---
+
+  public async createInsurancePolicy(input: Omit<InsurancePolicyEntity, "createdAt">): Promise<InsurancePolicyEntity> {
+    this.checkProductionDatabase();
+    const entry: InsurancePolicyEntity = { ...input, createdAt: new Date() };
+    if (db) {
+      const [row] = await db.insert(schema.insurancePolicies).values(entry).returning();
+      return row as InsurancePolicyEntity;
+    }
+    if (this.memPolicies.some((p) => p.patientId === entry.patientId && p.policyNumber === entry.policyNumber)) {
+      throw new Error("This policy is already on file.");
+    }
+    this.memPolicies.push(entry);
+    return entry;
+  }
+
+  public async getInsurancePoliciesByPatientId(patientId: string): Promise<InsurancePolicyEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.insurancePolicies)
+        .where(eq(schema.insurancePolicies.patientId, patientId))
+        .orderBy(desc(schema.insurancePolicies.createdAt));
+      return rows as InsurancePolicyEntity[];
+    }
+    return this.memPolicies
+      .filter((p) => p.patientId === patientId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  public async getInsurancePolicyById(id: string): Promise<InsurancePolicyEntity | undefined> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db.select().from(schema.insurancePolicies).where(eq(schema.insurancePolicies.id, id)).limit(1);
+      return rows[0] as InsurancePolicyEntity | undefined;
+    }
+    return this.memPolicies.find((p) => p.id === id);
+  }
+
+  public async updateInsurancePolicy(
+    id: string,
+    patch: Partial<Pick<InsurancePolicyEntity, "status" | "verifiedAt" | "providerReference" | "sumInsuredPaise" | "copayPercent">>
+  ): Promise<void> {
+    this.checkProductionDatabase();
+    if (db) {
+      await db.update(schema.insurancePolicies).set(patch).where(eq(schema.insurancePolicies.id, id));
+      return;
+    }
+    const idx = this.memPolicies.findIndex((p) => p.id === id);
+    if (idx >= 0) this.memPolicies[idx] = { ...this.memPolicies[idx], ...patch };
+  }
+
+  public async createPreauthRequest(
+    input: Omit<PreauthRequestEntity, "createdAt" | "updatedAt">
+  ): Promise<PreauthRequestEntity> {
+    this.checkProductionDatabase();
+    const now = new Date();
+    const entry: PreauthRequestEntity = { ...input, createdAt: now, updatedAt: now };
+    if (db) {
+      const [row] = await db.insert(schema.preauthRequests).values(entry).returning();
+      return row as PreauthRequestEntity;
+    }
+    if (this.memPreauths.some((r) => r.appointmentId === entry.appointmentId)) {
+      throw new Error("A pre-authorisation already exists for this appointment.");
+    }
+    this.memPreauths.push(entry);
+    return entry;
+  }
+
+  public async getPreauthByAppointmentId(appointmentId: string): Promise<PreauthRequestEntity | undefined> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.preauthRequests)
+        .where(eq(schema.preauthRequests.appointmentId, appointmentId))
+        .limit(1);
+      return rows[0] as PreauthRequestEntity | undefined;
+    }
+    return this.memPreauths.find((r) => r.appointmentId === appointmentId);
+  }
+
+  public async getPreauthsByPatientId(patientId: string): Promise<PreauthRequestEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.preauthRequests)
+        .where(eq(schema.preauthRequests.patientId, patientId))
+        .orderBy(desc(schema.preauthRequests.createdAt));
+      return rows as PreauthRequestEntity[];
+    }
+    return this.memPreauths
+      .filter((r) => r.patientId === patientId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  public async updatePreauthRequest(
+    id: string,
+    patch: Partial<
+      Pick<PreauthRequestEntity, "status" | "approvedAmountPaise" | "providerReference" | "statusNote" | "policyId" | "estimatedAmountPaise">
+    >
+  ): Promise<void> {
+    this.checkProductionDatabase();
+    const updatedAt = new Date();
+    if (db) {
+      await db.update(schema.preauthRequests).set({ ...patch, updatedAt }).where(eq(schema.preauthRequests.id, id));
+      return;
+    }
+    const idx = this.memPreauths.findIndex((r) => r.id === id);
+    if (idx >= 0) this.memPreauths[idx] = { ...this.memPreauths[idx], ...patch, updatedAt };
+  }
+
+  public async createClaim(input: Omit<ClaimEntity, "createdAt" | "updatedAt">): Promise<ClaimEntity> {
+    this.checkProductionDatabase();
+    const now = new Date();
+    const entry: ClaimEntity = { ...input, createdAt: now, updatedAt: now };
+    if (db) {
+      const [row] = await db.insert(schema.claims).values(entry).returning();
+      return row as ClaimEntity;
+    }
+    if (this.memClaims.some((c) => c.appointmentId === entry.appointmentId)) {
+      throw new Error("A claim already exists for this appointment.");
+    }
+    this.memClaims.push(entry);
+    return entry;
+  }
+
+  public async getClaimByAppointmentId(appointmentId: string): Promise<ClaimEntity | undefined> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db.select().from(schema.claims).where(eq(schema.claims.appointmentId, appointmentId)).limit(1);
+      return rows[0] as ClaimEntity | undefined;
+    }
+    return this.memClaims.find((c) => c.appointmentId === appointmentId);
+  }
+
+  public async getClaimsByPatientId(patientId: string): Promise<ClaimEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.claims)
+        .where(eq(schema.claims.patientId, patientId))
+        .orderBy(desc(schema.claims.createdAt));
+      return rows as ClaimEntity[];
+    }
+    return this.memClaims
+      .filter((c) => c.patientId === patientId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  public async updateClaim(
+    id: string,
+    patch: Partial<Pick<ClaimEntity, "status" | "settledAmountPaise" | "providerReference" | "statusNote">>
+  ): Promise<void> {
+    this.checkProductionDatabase();
+    const updatedAt = new Date();
+    if (db) {
+      await db.update(schema.claims).set({ ...patch, updatedAt }).where(eq(schema.claims.id, id));
+      return;
+    }
+    const idx = this.memClaims.findIndex((c) => c.id === id);
+    if (idx >= 0) this.memClaims[idx] = { ...this.memClaims[idx], ...patch, updatedAt };
+  }
+
+  // --- Patient engagement queries ---
+
+  /** Appointments with a date in [fromDate, toDate] (YYYY-MM-DD, inclusive) and one of the given statuses. */
+  public async getAppointmentsInRange(
+    fromDate: string,
+    toDate: string,
+    statuses: AppointmentStatus[]
+  ): Promise<AppointmentEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db
+        .select()
+        .from(schema.appointments)
+        .where(
+          and(
+            gte(schema.appointments.appointmentDate, fromDate),
+            lte(schema.appointments.appointmentDate, toDate),
+            inArray(schema.appointments.status, statuses)
+          )
+        );
+      return rows as AppointmentEntity[];
+    }
+    return this.memAppointments.filter(
+      (a) => a.appointmentDate >= fromDate && a.appointmentDate <= toDate && statuses.includes(a.status)
+    );
+  }
+
+  public async getPatientsPage(limit: number, offset: number = 0): Promise<PatientEntity[]> {
+    this.checkProductionDatabase();
+    if (db) {
+      const rows = await db.select().from(schema.patients).orderBy(schema.patients.id).limit(limit).offset(offset);
+      return rows as PatientEntity[];
+    }
+    return [...this.memPatients].sort((a, b) => a.id.localeCompare(b.id)).slice(offset, offset + limit);
   }
 
   // --- Payment Operations ---

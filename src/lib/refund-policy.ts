@@ -63,7 +63,7 @@ export function computeRefund(input: ComputeRefundInput): ComputeRefundResult {
   }
 
   // Calculate hours until appointment start
-  // Appointment date and start time in local hospital time
+  // Appointment date and start time are hospital time (Asia/Kolkata), whatever the server's timezone
   const appointmentStart = buildInstantFromKolkataTime(appointmentDate, startTime);
   const diffMs = appointmentStart.getTime() - now.getTime();
   const hoursUntilStart = diffMs / (1000 * 60 * 60);

@@ -14,10 +14,13 @@ export const revalidate = 0;
 
 export default async function DoctorProfilePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ date?: string; slot?: string }>;
 }) {
   const { id } = await params;
+  const { date: initialDate, slot: initialSlot } = await searchParams;
   const doctor = await dbRepo.getDoctorById(id);
   if (!doctor) {
     notFound();
@@ -121,6 +124,8 @@ export default async function DoctorProfilePage({
             doctorName={`${doctor.firstName} ${doctor.lastName}`}
             consultationFee={doctor.consultationFee}
             isLoggedIn={isLoggedIn}
+            initialDate={initialDate}
+            initialSlot={initialSlot}
           />
         </div>
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useRef, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getDoctorSessionsAction } from "@/actions/availability";
@@ -31,6 +31,9 @@ interface SlotPickerProps {
   doctorName: string;
   consultationFee: number;
   isLoggedIn: boolean;
+  /** Optional deep link (from the assistant): open on this date and pre-select this slot. */
+  initialDate?: string;
+  initialSlot?: string;
 }
 
 interface Slot {
@@ -107,8 +110,11 @@ export function SlotPicker({
   doctorName,
   consultationFee,
   isLoggedIn,
+  initialDate,
+  initialSlot,
 }: SlotPickerProps) {
   const [isPending, startTransition] = useTransition();
+  const initialSlotPending = useRef(Boolean(initialSlot));
   const router = useRouter();
 
   const [availableDates] = useState(() => {
@@ -135,7 +141,9 @@ export function SlotPicker({
     return list;
   });
 
-  const [selectedDate, setSelectedDate] = useState(availableDates[0]?.dateString || "");
+  const [selectedDate, setSelectedDate] = useState(
+    availableDates.find((d) => d.dateString === initialDate)?.dateString || availableDates[0]?.dateString || ""
+  );
   const [groups, setGroups] = useState<SessionGroup[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [isLeave, setIsLeave] = useState(false);
@@ -173,7 +181,13 @@ export function SlotPicker({
       if (res.success) {
         setIsLeave(Boolean(res.isLeave));
         setLeaveReason(res.leaveReason || null);
-        setGroups((res.groups as SessionGroup[]) || []);
+        const loaded = (res.groups as SessionGroup[]) || [];
+        setGroups(loaded);
+        if (initialSlotPending.current) {
+          initialSlotPending.current = false;
+          const wanted = loaded.flatMap((g) => g.slots).find((s) => s.startTime === initialSlot && !s.isBooked);
+          if (wanted) setSelectedSlot(wanted);
+        }
       } else {
         setGroups([]);
         if (res.error) setError(res.error);

@@ -33,11 +33,74 @@ import {
 } from "lucide-react";
 import type { SessionPayload } from "@/lib/auth-crypto";
 import { logoutAction, deleteAccountAction } from "@/actions/auth";
+import { getMyNotificationsAction, type InboxItem } from "@/actions/notifications";
 
 import { Button } from "@/components/ui/button";
 interface ClinicalShellProps {
   user: SessionPayload | null;
   children: React.ReactNode;
+}
+
+/** Bell menu: the signed-in user's recent emails and updates (bookings, receipts, insurance, follow-ups). */
+function NotificationBell({ signedIn }: { signedIn: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<InboxItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (!next) return;
+    if (!signedIn) {
+      setItems([]);
+      return;
+    }
+    const res = await getMyNotificationsAction();
+    if (res.success) {
+      setItems(res.items);
+      setError(null);
+    } else {
+      setError(res.error);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <Button variant="bare" className="icon-btn notification" onClick={toggle} title="Notifications" aria-expanded={open}>
+        <Bell size={18} />
+        <i />
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-2 w-[min(22rem,90vw)] rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+          <div className="flex items-center justify-between px-2 py-1.5 text-xs font-bold text-slate-700">
+            <span>Recent messages</span>
+            <button type="button" className="text-slate-400 hover:text-slate-700" onClick={() => setOpen(false)} aria-label="Close">
+              <X size={14} />
+            </button>
+          </div>
+          <div className="max-h-96 space-y-1 overflow-y-auto">
+            {error ? (
+              <p className="px-2 py-3 text-xs text-red-700">{error}</p>
+            ) : items === null ? (
+              <p className="px-2 py-3 text-xs text-slate-500">Loading…</p>
+            ) : items.length === 0 ? (
+              <p className="px-2 py-3 text-xs text-slate-500">{signedIn ? "No messages yet." : "Sign in to see your messages."}</p>
+            ) : (
+              items.map((n) => (
+                <div key={n.id} className="rounded-lg px-2 py-2 hover:bg-slate-50">
+                  <p className="text-xs font-bold text-slate-900">{n.subject}</p>
+                  <p className="mt-0.5 text-[11px] leading-snug text-slate-600">{n.preview}</p>
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    {new Date(n.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })} · {n.status.toLowerCase()}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ClinicalShell({ user, children }: ClinicalShellProps) {
@@ -86,6 +149,7 @@ export function ClinicalShell({ user, children }: ClinicalShellProps) {
     if (pathname.startsWith("/admin/notifications")) return "Notification Delivery Engine";
     if (pathname.startsWith("/reports")) return "Visit Reports & Analytics";
     if (pathname.startsWith("/patient/payments")) return "Payments & Receipts";
+    if (pathname.startsWith("/patient/insurance")) return "Insurance & Cashless";
     if (pathname.startsWith("/patient/dashboard")) return "Patient Portal";
     if (pathname.startsWith("/doctor/dashboard")) return "Doctor Agenda";
     if (pathname.startsWith("/doctor/availability")) return "Weekly Shifts";
@@ -181,6 +245,15 @@ export function ClinicalShell({ user, children }: ClinicalShellProps) {
               >
                 <CreditCard size={17} />
                 <span>Payments & Receipts</span>
+              </Link>
+
+              <Link
+                href="/patient/insurance"
+                onClick={() => setSidebarOpen(false)}
+                className={`nav-item ${pathname.startsWith("/patient/insurance") ? "active" : ""}`}
+              >
+                <ShieldCheck size={17} />
+                <span>Insurance</span>
               </Link>
 
               <Link
@@ -424,14 +497,7 @@ export function ClinicalShell({ user, children }: ClinicalShellProps) {
             </Link>
 
             {/* Notifications Button */}
-            <Button variant="bare"
-              className="icon-btn notification"
-              onClick={() => alert("All hospital appointment queues are operating smoothly.")}
-              title="Clinical Alerts"
-            >
-              <Bell size={18} />
-              <i />
-            </Button>
+            <NotificationBell signedIn={!!user} />
 
             {/* User Profile Mini Trigger */}
             {user ? (
