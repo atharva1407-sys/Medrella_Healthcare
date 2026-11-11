@@ -8,6 +8,17 @@ import { seedSpecialists } from "./seed-specialists";
 import { appointmentOccupiesSeat, occupiesSeatSql } from "../lib/seat-occupancy";
 import { buildInstantFromKolkataTime, istDateString, istMinutesOfDay } from "../lib/time";
 import {
+  analyzeSessionChange,
+  classifyBooking,
+  affectedMessage,
+  planRelocations,
+  SessionChangeBlocked,
+  type BookingResolution,
+  type ElasticBooking,
+  type FreeSlot,
+  type SessionChangeImpact,
+} from "../lib/elastic-schedule";
+import {
   firstSharedDate,
   formatDateLabel,
   normalizeSchedule,
@@ -16,6 +27,7 @@ import {
   validateScheduleNotInPast,
   validateScheduleShape,
   weekdayOfDate,
+  addDaysToDate,
   type DayCode,
   type SessionRecurrence,
 } from "../lib/session-schedule";
@@ -939,11 +951,118 @@ export class MedrellaRepository {
     return this.memAvailabilities.find((a) => a.id === id && a.doctorId === doctorId);
   }
 
+  /**
+   * Upcoming appointments (today onwards) that currently hold a seat in a session, with the patient's
+   * name so the doctor can see who an edit would touch.
+   */
+  private async upcomingSessionBookings(sessionId: string): Promise<ElasticBooking[]> {
+    const today = toLocalDateString(new Date());
+    if (db) {
+      const rows = await db
+        .select({
+          id: schema.appointments.id,
+          appointmentDate: schema.appointments.appointmentDate,
+          startTime: schema.appointments.startTime,
+          endTime: schema.appointments.endTime,
+          tokenNumber: schema.appointments.tokenNumber,
+          firstName: schema.patients.firstName,
+          lastName: schema.patients.lastName,
+        })
+        .from(schema.appointments)
+        .leftJoin(schema.patients, eq(schema.patients.id, schema.appointments.patientId))
+        .where(
+          and(
+            eq(schema.appointments.sessionId, sessionId),
+            occupiesSeatSql(),
+            gte(schema.appointments.appointmentDate, today)
+          )
+        )
+        .orderBy(schema.appointments.appointmentDate, schema.appointments.startTime);
+      return rows.map((r) => ({
+        id: r.id,
+        appointmentDate: r.appointmentDate,
+        startTime: r.startTime,
+        endTime: r.endTime,
+        tokenNumber: r.tokenNumber,
+        patientName: r.firstName ? `${r.firstName} ${r.lastName ?? ""}`.trim() : undefined,
+      }));
+    }
+    return this.memAppointments
+      .filter((a) => a.sessionId === sessionId && appointmentOccupiesSeat(a) && a.appointmentDate >= today)
+      .sort((a, b) => (a.appointmentDate + a.startTime).localeCompare(b.appointmentDate + b.startTime))
+      .map((a) => {
+        const p = this.memPatients.find((pt) => pt.id === a.patientId);
+        return {
+          id: a.id,
+          appointmentDate: a.appointmentDate,
+          startTime: a.startTime,
+          endTime: a.endTime,
+          tokenNumber: a.tokenNumber,
+          patientName: p ? `${p.firstName} ${p.lastName}`.trim() : undefined,
+        };
+      });
+  }
+
+  /**
+   * Dry run of the MOVE option: with the doctor's sessions as they WOULD be after the edit, how many of
+   * the affected bookings could be placed in a free slot, and how many would have nowhere to go.
+   */
+  private async previewRelocation(
+    doctorId: string,
+    updatedSession: AvailabilityEntity,
+    affected: ElasticBooking[]
+  ): Promise<{ movable: number; stuck: number }> {
+    const sessions = (await this.getAvailabilitiesByDoctorId(doctorId)).map((s) =>
+      s.id === updatedSession.id ? updatedSession : s
+    );
+    const dates = new Set<string>();
+    const today = toLocalDateString(new Date());
+    const lastBookableDate = addDaysToDate(today, 30);
+    for (const b of affected) {
+      for (let d = b.appointmentDate; d <= addDaysToDate(b.appointmentDate, 14) && d <= lastBookableDate; d = addDaysToDate(d, 1)) {
+        dates.add(d);
+      }
+    }
+    const freeByDate = new Map<string, FreeSlot[]>();
+    for (const date of dates) {
+      const { groups } = await this.computeSessionGroups(doctorId, date, sessions);
+      freeByDate.set(
+        date,
+        groups.flatMap((g) =>
+          g.slots
+            .filter((s) => !s.isBooked && s.seatsLeft > 0)
+            .map((s) => ({ date, sessionId: g.sessionId, startTime: s.startTime, endTime: s.endTime, seatsLeft: s.seatsLeft }))
+        )
+      );
+    }
+    return planRelocations(affected, (date) => freeByDate.get(date) ?? [], { today, lastBookableDate });
+  }
+
   public async updateAvailabilitySession(
     doctorId: string,
     id: string,
-    updates: Partial<Omit<AvailabilityEntity, "id" | "doctorId">>
+    updates: Partial<Omit<AvailabilityEntity, "id" | "doctorId">>,
+    options: { resolution?: BookingResolution } = {}
   ): Promise<AvailabilityEntity> {
+    return (await this.updateAvailabilitySessionWithImpact(doctorId, id, updates, options)).session;
+  }
+
+  /**
+   * Edits a session (including stretching or shrinking its hours) and reports what the edit did to
+   * its slots and bookings. The doctor can always change the hours, but when an edit affects bookings
+   * (the new hours or slots no longer cover them) it is only saved once the doctor has said what
+   * should happen to them (`options.resolution`); without that, SessionChangeBlocked is thrown and
+   * nothing is saved. This method never moves or cancels a booking itself: the caller does that for
+   * MOVE and CANCEL, using the returned `impact.affectedBookings`.
+   * Only bookings this edit would newly affect count; ones already outside before it don't hold up
+   * unrelated edits such as a rename.
+   */
+  public async updateAvailabilitySessionWithImpact(
+    doctorId: string,
+    id: string,
+    updates: Partial<Omit<AvailabilityEntity, "id" | "doctorId">>,
+    options: { resolution?: BookingResolution } = {}
+  ): Promise<{ session: AvailabilityEntity; impact: SessionChangeImpact }> {
     this.checkProductionDatabase();
     const current = await this.findOwnedSession(doctorId, id);
 
@@ -984,6 +1103,7 @@ export class MedrellaRepository {
     }
 
     const newIsActive = updates.isActive ?? current.isActive;
+    const newSlotDuration = updates.slotDurationMinutes || current.slotDurationMinutes;
     if (newIsActive) {
       const allSessions = await this.getAvailabilitiesByDoctorId(current.doctorId);
       this.assertNoSessionClash(
@@ -992,6 +1112,13 @@ export class MedrellaRepository {
       );
     }
 
+    // Elastic scheduling: see what this edit does to the slots and to bookings already made.
+    const upcoming = await this.upcomingSessionBookings(id);
+    const impact = analyzeSessionChange(
+      { startTime: current.startTime, endTime: current.endTime, slotDurationMinutes: current.slotDurationMinutes },
+      { startTime: newStartTime, endTime: newEndTime, slotDurationMinutes: newSlotDuration, ...schedule },
+      upcoming.filter((b) => classifyBooking(b, current) === "KEPT")
+    );
     const newSchedulingType = updates.schedulingType || current.schedulingType || "STREAM";
     const updated: AvailabilityEntity = {
       ...current,
@@ -1006,6 +1133,14 @@ export class MedrellaRepository {
       ),
       ...schedule,
     };
+
+    if (newIsActive && impact.affectedBookings.length > 0) {
+      // Tell the doctor up front how many of them could actually be moved (every other slot may be full).
+      impact.relocationPreview = await this.previewRelocation(current.doctorId, updated, impact.affectedBookings);
+      if (!options.resolution) {
+        throw new SessionChangeBlocked(affectedMessage(impact), impact);
+      }
+    }
 
     if (db) {
       await db
@@ -1026,11 +1161,11 @@ export class MedrellaRepository {
           validUntil: schedule.validUntil,
         })
         .where(and(eq(schema.availabilities.id, id), eq(schema.availabilities.doctorId, doctorId)));
-      return updated;
+      return { session: updated, impact };
     }
 
     Object.assign(current, updated);
-    return updated;
+    return { session: updated, impact };
   }
 
   /**
@@ -1217,9 +1352,14 @@ export class MedrellaRepository {
   }
 
   // --- Dynamic Slot Computation Engine (Wave & Sessions Aware) ---
+  /**
+   * `sessionsOverride` lets a caller ask "what would the slots be if the doctor's sessions looked like
+   * this?" (used to preview a schedule edit before it is saved). Normally the saved sessions are used.
+   */
   public async computeSessionGroups(
     doctorId: string,
-    dateString: string
+    dateString: string,
+    sessionsOverride?: AvailabilityEntity[]
   ): Promise<{ isLeave: boolean; leaveReason?: string | null; groups: SessionSlotGroup[] }> {
     this.checkProductionDatabase();
 
@@ -1231,7 +1371,7 @@ export class MedrellaRepository {
       return { isLeave: true, leaveReason: leave?.reason || "Doctor on approved clinical leave", groups: [] };
     }
 
-    const allSessions = await this.getAvailabilitiesByDoctorId(doctorId);
+    const allSessions = sessionsOverride ?? (await this.getAvailabilitiesByDoctorId(doctorId));
     if (!allSessions.some((s) => sessionAppliesOnDate(s, dateString))) {
       return { isLeave: false, groups: [] };
     }

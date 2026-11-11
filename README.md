@@ -1,397 +1,246 @@
-# 🏥 Medrella Healthcare — Outpatient Hospital Appointment & Clinical Scheduling Platform
+# Medrella Healthcare — Outpatient Platform & Healthcare Agent
 
-[![Next.js](https://img.shields.io/badge/Next.js-16.4.3-black?logo=next.js)](https://nextjs.org/)
-[![React](https://img.shields.io/badge/React-19.3.0-blue?logo=react)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind-4.0-38bdf8?logo=tailwind-css)](https://tailwindcss.com/)
-[![Radix UI](https://img.shields.io/badge/UI-Radix%20Primitives-black?logo=radix-ui)](https://www.radix-ui.com/)
-[![Drizzle ORM](https://img.shields.io/badge/ORM-Drizzle-C5F74F?logo=drizzle)](https://orm.drizzle.team/)
-[![PostgreSQL](https://img.shields.io/badge/Database-Neon%20Postgres-00e599?logo=postgresql)](https://neon.tech/)
-[![Razorpay](https://img.shields.io/badge/Payments-Razorpay%20(Test%20Mode)-0c2340?logo=razorpay)](https://razorpay.com/)
-[![Tests](https://img.shields.io/badge/Tests-521%20Passing-brightgreen)](#-automated-testing--quality-assurance)
-[![Deployment](https://img.shields.io/badge/Deploy-Vercel-black?logo=vercel)](https://medrella-healthcare.vercel.app)
+A Next.js 16 (App Router, React 19, TypeScript, Tailwind 4, shadcn/ui) outpatient appointment platform with Drizzle ORM on Neon PostgreSQL. Features full OPD booking, payments, notifications, and a **Healthcare Agent**.
 
-A modern, production-grade outpatient hospital management and consultation scheduling platform built for **Medrella Healthcare, Ruby Hall, Pune, Maharashtra**.
+**Live app:** https://medrella-healthcare.vercel.app
 
-Medrella streamlines the entire outpatient department (OPD) journey: patients can find trusted specialists, select available stream or wave slots, pay consultation fees securely via Razorpay, receive automated transactional notifications and reminders, reschedule or cancel visits with automated refund processing, and download GST receipts. Clinicians manage multi-session schedules, patient queues, and medical records from a dedicated clinical dashboard.
+| Capability | What it does | Where |
+|---|---|---|
+| **Conversational assistant** | Patients chat (English, Hindi, Marathi…) to find a doctor, see open slots, review appointments and insurance, and prepare a booking. Powered by Sarvam AI with tool calling. | `/patient/assistant`, `src/lib/agent/` |
+| **Proactive engagement** | Follow-up message after a completed visit, check-up reminders and "we miss you" nudges (opt-in), all through the existing email outbox. | `src/lib/engagement/`, `/api/cron/engagement` |
+| **Flexible scheduling** | Wave and Stream sessions that repeat weekly, on a date of the month, or run on one date only, with optional from/until dates and a configurable number of patients per slot. | `/doctor/availability`, `src/lib/session-schedule.ts` |
+| **Insurance workflow** | Policies, cashless pre-authorisation and claims with status tracking and email updates. **Uses a simulated insurer** (see limits). | `/patient/insurance`, `src/lib/insurance/` |
 
----
+## How the assistant works
 
-## 🌐 Live Application & Quick Links
+1. The browser sends the message and the last turns of chat to `POST /api/agent/chat` (signed-in patients only, same-origin, rate limited to 20 messages per 10 minutes).
+2. **Emergency check first.** Messages that sound like emergencies (chest pain, breathlessness, self-harm… in English, Hindi and Marathi) get fixed guidance (call 112) and never reach the model.
+3. The model gets a system prompt plus **tools**. It cannot touch the database directly:
 
-* 🔗 **Live Website**: [https://medrella-healthcare.vercel.app](https://medrella-healthcare.vercel.app)
-* 👨‍⚕️ **Find Doctors**: [https://medrella-healthcare.vercel.app/doctors](https://medrella-healthcare.vercel.app/doctors)
-* 📊 **Live OPD Queue**: [https://medrella-healthcare.vercel.app/queue](https://medrella-healthcare.vercel.app/queue)
-* 📈 **Analytics & Reports**: [https://medrella-healthcare.vercel.app/reports](https://medrella-healthcare.vercel.app/reports)
-* ⚙️ **Notification Preferences**: [https://medrella-healthcare.vercel.app/settings](https://medrella-healthcare.vercel.app/settings)
-* 📬 **Admin Outbox Monitor**: [https://medrella-healthcare.vercel.app/admin/notifications](https://medrella-healthcare.vercel.app/admin/notifications)
+| Tool | Effect |
+|---|---|
+| `search_doctors`, `get_open_slots`, `list_my_appointments`, `insurance_overview` | Read-only lookups for the signed-in patient |
+| `propose_booking` | Validates the slot and returns a **card** linking to the booking page with the slot pre-selected. The patient reviews and pays there. |
+| `propose_manage_appointment` | Card pointing to the dashboard, where the refund amount is shown before cancelling |
+| `propose_preauth` | Card with a **confirm button**; nothing is sent to the insurer until the patient presses it |
 
-> **Payment Environment**: Medrella operates in **Razorpay Test Mode**. No real money is charged. Official test cards and test UPI credentials are documented in the [Demo Credentials](#-demo-accounts--test-credentials) section.
+4. Safety rules enforced in code, not only in the prompt: no booking or payment by the agent, every tool is scoped to the signed-in patient, arguments are validated with Zod, at most 6 model rounds and 3 tool calls per round, history from the browser is stripped to plain user/assistant text, tool results carry no free-text bios, and the audit log (`agent_events`) records tool names and arguments but **never message text**.
 
----
+## Environment variables
 
-## ✨ Complete Feature Matrix
+| Variable | Purpose |
+|---|---|
+| `SARVAM_API_KEY` | Sarvam AI key. Without it the assistant shows "not set up" and everything else still works. |
+| `SARVAM_MODEL` | Optional. Defaults to `sarvam-105b-conversations`. |
+| `INSURANCE_PROVIDER` | `mock` to enable the simulated insurer in production, `off` to disable. Outside production the simulator is on by default. |
+| `ENGAGEMENT_CARE_REMINDER_DAYS` / `ENGAGEMENT_REENGAGE_DAYS` | Days since the last visit before a check-up reminder (default 90) or re-engagement message (default 180). |
 
-### 1. 🧑‍🤝‍🧑 Patient Experience & Consultation Booking
-* **Specialist Discovery**: Explore 8 founding medical specialists across Cardiology, Neurology, Orthopedics, Pediatrics, Oncology, Dermatology, Gynecology, and General Medicine.
-* **Next Open Slot Preview**: The landing catalog dynamically calculates and displays each specialist's next available consultation window in Indian Standard Time (`Asia/Kolkata`).
-* **Visual Slot Picker**: Real-time interactive slot selector displaying date carousels, morning/evening session tabs, and live capacity indicators.
-* **Dual Scheduling Models**:
-  * **Stream Scheduling**: Consecutive 1-on-1 private consultation intervals (e.g., 15 or 30 minutes).
-  * **Wave Scheduling**: High-throughput time windows (e.g., 10:00–11:00 AM) admitting multiple patients with sequential token numbers (Token #1, #2, #3).
-* **10-Minute Seat Holds**: Selecting a slot places a temporary 10-minute seat reservation (`HOLD`), preventing double-booking while the patient completes payment.
-* **Instant Rescheduling**: Move any confirmed appointment to another open slot with 1 click in a single atomic database transaction.
-* **Self-Service Cancellations**: Cancel consultations directly from the dashboard with live refund previews based on hospital cancellation tiers.
-* **Patient Portal**: Track upcoming visits, view past medical history, download printable invoices, and manage notification preferences.
+All variables from Task 5 (database, Razorpay, Brevo, `CRON_SECRET`, `ADMIN_EMAILS`…) still apply; see `.env.example`.
 
-### 2. 🩺 Doctor Management & Clinical Operations
-* **Physician Dashboard**: Real-time view of today’s consultation schedule, patient vitals, token status, and daily consultation counts.
-* **Queue & Encounter Workflow**: Triage patients, call tokens to consultation rooms, and mark encounters as **`COMPLETED`** or **`NO_SHOW`**.
-* **Flexible OPD Sessions**: Multiple sessions per day (e.g., Morning OPD 09:00–13:00 and Evening OPD 17:00–20:00), each **Stream** or **Wave**, with a slot length from 10 minutes to 10 hours and **1–20 patients per slot** (Stream and Wave alike).
-* **Wave & Stream Scheduling Options**: A session can repeat **every week**, on a **date of the month** (e.g. the 1st), or run on **one date only** (also on several dates in one go). Recurring sessions accept an optional "runs from / until" range, and a session can be **one slot for the whole window** (e.g. 10:00–12:00 with 20 patients, seen in token order).
-* **Non-Overlapping Session Guard**: Database and server validation refuses two sessions of one doctor only when their hours overlap **and** they run on a shared date.
-* **Leave & Blockout Calendar**: Doctors can log planned clinical leave. The system blocks patient bookings on leave dates and strictly prevents doctors from taking leave if active patient bookings already exist.
+## Run it
 
-### 3. 💳 Razorpay Payments, Invoicing & Refunds
-* **Razorpay Checkout Integration**: Mounted official Razorpay Checkout popup supporting Domestic Cards, Netbanking, and UPI.
-* **Server-Side Security**: Consultation fees are fetched directly from the database; client-supplied amounts are ignored. Cryptographic HMAC-SHA256 signatures are verified before confirming appointments.
-* **Idempotent Webhooks**: Secure webhook route (`/api/webhooks/razorpay`) with secret verification and replay protection.
-* **Seat Hold Expiration Worker**: Background sweeper releases expired holds, automatically refunding late captured payments.
-* **Transparent Refund Engine**:
-  * **>= 24 Hours Before Start Time**: 100% full refund.
-  * **2 to 24 Hours Before Start Time**: 50% partial refund.
-  * **< 2 Hours Before Start Time**: 0% refund (late cancellation).
-  * **Doctor Emergency / Clinic Cancellation**: 100% full refund guaranteed.
-* **Printable GST Receipts**: Clean, printer-friendly invoices showing Medrella hospital details, doctor specialization, appointment tokens, transaction IDs, and tax breakdowns.
-
-### 4. 📬 Reliable Email Notifications & Outbox Architecture
-* **Outbox Architecture**: All transactional notifications are written to an outbox table within safe try/catch blocks; delivery issues never disrupt clinical bookings or payments.
-* **Deterministic Deduplication**: Unique keys (`confirm-${id}`, `remind-${id}-${offset}`, `welcome-${id}`) eliminate duplicate emails during webhook replays or browser refreshes.
-* **Multi-Provider Support**: Integrated with **Brevo** and **Resend** transactional email APIs, with automatic fallback to `ConsoleChannel` in local development.
-* **Fail-Closed Safety**: In production, absent or invalid API keys fail closed—messages are never falsely marked as `SENT`.
-* **Asia/Kolkata (`Asia/Kolkata`, IST = UTC+05:30) Precision**: All appointment start times and reminder offsets (24h and 2h before visits) are calculated in IST, avoiding midnight UTC day-shift bugs.
-* **Pre-Send Status Recheck**: Reminders re-verify appointment status right before sending; if an appointment is cancelled, rescheduled, or completed, the reminder is automatically marked `CANCELLED`.
-* **Clinical Privacy (PHI Protection)**: Sensitive medical notes, symptoms, and diagnoses are stripped from email payloads. Cancellation reasons are strictly sanitized against an approved non-clinical whitelist.
-* **Patient Preferences & Expiring Unsubscribe**: Patients can opt out of promotional emails in Settings (`/settings`) or via 1-click cryptographically signed HMAC-SHA256 tokens (`/unsubscribe`).
-* **Admin Dead-Letter Queue (`/admin/notifications`)**: Role-protected dashboard to monitor outbox metrics (Sent, Pending, Failed), inspect error logs, and trigger 1-click retries.
-
-### 5. 🤖 Healthcare Agent, Insurance & Patient Engagement
-* **Conversational Assistant**: A chat popup on **My Appointments** (powered by Sarvam AI with tool calling) lets patients ask in English, Hindi or Marathi to find a doctor, see open slots, review their appointments and insurance, and *prepare* a booking. The assistant never books or pays by itself: it returns a card that opens the booking page with the date and slot pre-selected.
-* **Safety First**: Emergency messages (chest pain, breathlessness, self-harm…) get fixed guidance to call 112 and never reach the model. Every tool is scoped to the signed-in patient, no medical advice is given, there is a rate limit, and the audit log (`agent_events`) never stores message text.
-* **Insurance Workflow** (`/patient/insurance`): Add policies, request **cashless pre-authorisation** for a paid appointment, file claims after a completed visit, and follow status updates by email. The insurer is **simulated** (`INSURANCE_PROVIDER=mock`) behind an interface, so a real provider can replace it later.
-* **Proactive Engagement** (`GET /api/cron/engagement`): Follow-up email 1–3 days after a completed visit; opt-in check-up and re-engagement reminders with unsubscribe links, all through the existing outbox with deduplication.
-
-### 6. 🎨 Modern Design System & User Experience
-* **Radix UI & Tailwind CSS 4**: Built using accessible primitives (`Card`, `Badge`, `Button`, `Dialog`, `Table`, `Tabs`, `Switch`, `Checkbox`, `Select`, `Textarea`).
-* **Clinical Brand Theme**: Styled with a medical-grade palette reflecting Medrella Healthcare’s facility in Ruby Hall, Pune.
-* **Responsive Layouts**: Optimized for mobile smartphones, tablets, and desktop clinical monitors.
-* **Zero Layout Shift**: Skeleton loaders and loading templates for seamless page transitions.
-
-### 7. 🛡️ Security & Enterprise Hardening
-* **Password Hashing**: PBKDF2 with 600,000 iterations and cryptographic salts.
-* **Rate Limiting**: Brute-force protection locking authentication after 5 failed login attempts for 15 minutes.
-* **Session Security**: Cryptographically signed, HTTP-only, SameSite session cookies.
-* **Open-Redirect Protections**: Strict validation preventing backslash (`/\`), protocol-relative (`//`), and absolute external redirects.
-* **Role-Based Guards**: Protected route wrappers ensuring patients cannot access physician consoles, and only verified emails (`ADMIN_EMAILS`) can view outbox audit logs.
-
----
-
-## 🏗️ Architecture & Tech Stack
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Next.js 16 (App Router)                  │
-│   React 19 Server Components • Actions • Turbopack Engine   │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-       ┌───────────────────────┼────────────────────────┐
-       ▼                       ▼                        ▼
-┌──────────────┐     ┌──────────────────┐     ┌───────────────────┐
-│ Presentation │     │ Business Logic   │     │ Integrations      │
-│ • Tailwind 4 │     │ • Auth (PBKDF2)  │     │ • Razorpay Test   │
-│ • Radix UI   │     │ • OPD Scheduling │     │ • Brevo / Resend  │
-│ • Lucide     │     │ • Refund Engine  │     │ • Cron Sweepers   │
-└──────────────┘     └─────────┬────────┘     └───────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Drizzle ORM 0.39                       │
-│       Type-Safe Schemas • Additive Migrations (0000–0006)   │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                 Neon PostgreSQL Serverless                  │
-│       Connection Pooling • SSL Required • Multi-Tenant      │
-└─────────────────────────────────────────────────────────────┘
-```
-
-| Layer | Technology | Description |
-|:---|:---|:---|
-| **Framework** | **Next.js 16.4 (App Router)** | Full-stack React 19 framework with Server Actions and Turbopack. |
-| **Language** | **TypeScript 5** | Strict type safety across clinical logic, schemas, and API handlers. |
-| **Styling** | **Tailwind CSS 4** | Next-generation utility-first CSS engine. |
-| **Component Primitives** | **Radix UI** | Accessible, headless UI primitives (`dialog`, `tabs`, `switch`, `table`, etc.). |
-| **Icons** | **Lucide React** | Clean, modern medical and interface icons. |
-| **Database** | **PostgreSQL on Neon** | Serverless cloud PostgreSQL with connection pooling. |
-| **ORM** | **Drizzle ORM** | Lightweight, high-performance TypeScript ORM. |
-| **Validation** | **Zod 3** | Strict schema validation for clinical forms and API inputs. |
-| **Auth** | **Signed HTTP-Only Cookies** | PBKDF2 hashing (600,000 iterations) with stateless JWT cookies. |
-| **Payments** | **Razorpay SDK** | Test mode checkout popup, signature verification, and refund API. |
-| **Transactional Email** | **Brevo / Resend** | Outbox pattern dispatching transactional emails with fail-closed safety. |
-| **Deployment** | **Vercel** | Edge network deployment with automated Git integration. |
-
----
-
-## 🗄️ Database Schema & Entities
-
-The platform uses 10 normalized tables managed via Drizzle ORM:
-
-```mermaid
-erDiagram
-    users ||--o{ patients : "is"
-    users ||--o{ doctors : "is"
-    users ||--o{ notification_preferences : "configures"
-    users ||--o{ login_attempts : "tracks"
-    doctors ||--o{ doctor_sessions : "hosts"
-    doctors ||--o{ doctor_leave : "takes"
-    patients ||--o{ appointments : "books"
-    doctors ||--o{ appointments : "consults"
-    appointments ||--o{ payments : "bills"
-    payments ||--o{ refunds : "issues"
-    users ||--o{ notifications : "receives"
-
-    users {
-        uuid id PK
-        string email UK
-        string password_hash
-        string role "PATIENT | DOCTOR"
-        timestamp created_at
-    }
-
-    doctors {
-        uuid id PK
-        uuid user_id FK
-        string first_name
-        string last_name
-        string specialization
-        int consultation_fee
-        int experience_years
-        string image_url
-    }
-
-    doctor_sessions {
-        uuid id PK
-        uuid doctor_id FK
-        int day_of_week "0-6"
-        string session_type "STREAM | WAVE"
-        time start_time
-        time end_time
-        int slot_duration_minutes
-        int wave_capacity
-    }
-
-    appointments {
-        uuid id PK
-        uuid patient_id FK
-        uuid doctor_id FK
-        date appointment_date
-        time start_time
-        int token_number
-        string status "HOLD | BOOKED | COMPLETED | CANCELLED | NO_SHOW"
-        timestamp hold_expires_at
-    }
-
-    payments {
-        uuid id PK
-        uuid appointment_id FK
-        int amount
-        string status "PENDING | PAID | REFUNDED | FAILED"
-        string razorpay_order_id
-        string razorpay_payment_id
-    }
-
-    notifications {
-        uuid id PK
-        uuid user_id FK
-        string category "operational | promotional"
-        string template
-        string status "PENDING | SENT | FAILED | CANCELLED"
-        string dedupe_key UK
-        timestamp scheduled_for
-        string provider_message_id
-    }
-
-    notification_preferences {
-        uuid user_id PK, FK
-        boolean email_promotional
-        timestamp consented_at
-    }
-```
-
-### Migration History:
-* `0000_lazy_bruce_banner.sql`: Initial authentication & scheduling baseline (`users`, `patients`, `doctors`, `doctor_sessions`, `appointments`).
-* `0001_happy_bill_hollister.sql`: Wave scheduling attributes & token number sequences.
-* `0002_short_the_twelve.sql`: Doctor leave management (`doctor_leave`) and session group indexes.
-* `0003_narrow_doctor_octopus.sql`: Payments, refunds, hold expirations, and notification outbox tables.
-* `0004_careful_night_nurse.sql`: Notification preferences (`notification_preferences`), categories, and provider delivery IDs.
-* `0005_agent_insurance.sql`: Healthcare agent audit log (`agent_events`) and insurance tables (`insurance_policies`, `preauth_requests`, `claims`).
-* `0006_scheduling_dates.sql`: Scheduling dates on `availabilities` (`recurrence`, `day_of_month`, `specific_date`, `valid_from`, `valid_until`; `day_of_week` becomes optional). Existing sessions default to weekly.
-
----
-
-## 🧪 Automated Testing & Quality Assurance
-
-The codebase includes an automated verification suite covering 100% of critical clinical and financial paths:
-
-```bash
-npm test
-```
-
-### **Summary: 521 Tests Passing (0 Failures)**
-
-| Test Suite | File | Tests | Coverage Scope |
-|:---|:---|:---:|:---|
-| **Clinical Rules & Engine** | `src/test-suite.ts` | **115** | Checkbox parsing, IST date shift prevention, PBKDF2 verification, duplicate account locks, double-booking race condition prevention, cancellation boundaries, doctor leave blocks, multi-session overlap validation, wave capacity limits, token assignments, and atomic rescheduling. |
-| **Payment Hardening** | `src/test-payment-hardening.ts` | **72** | Gateway mode detection, amount tamper guards, Razorpay webhook signature verification, replay protection, seat hold expiration, late payment capture vs refund, honest refund status handling, and tiered refund percentages. |
-| **Reliable Notifications** | `src/test-notifications.ts` | **81** | Outbox event mappings, deduplication key uniqueness, IST midnight calculations, overlapping sweep protection (`FOR UPDATE SKIP LOCKED`), pre-send status rechecks, fail-safe isolation, PHI redaction, XSS escaping, HMAC-SHA256 tokens, and admin dead-letter retries. |
-| **Brevo & Welcome Flow** | `src/test-brevo-welcome.ts` | **31** | Brevo transactional API integration, API key redaction in error logs, fail-closed production semantics, welcome email delivery, and user registration onboarding. |
-| **Healthcare Agent & Insurance** | `src/test-agent.ts` | **104** | Emergency pre-check, prompt-injection and medicine-advice refusals, tool scoping to the signed-in patient, propose-only booking cards, insurance pre-auth and claim flows, engagement jobs and dedupe. |
-| **Hospital Timezone** | `src/test-timezone.ts` | **4** | Booking, cancel and refund rules re-run with the server clock set to four timezones. |
-| **Wave & Stream Scheduling** | `src/test-scheduling.ts` | **114** | One-date, weekly and monthly sessions, date ranges, Stream and Wave capacity, overlap rules, multi-date creation, whole-session windows, re-run under three timezones. |
-
----
-
-## 🚀 Getting Started Locally
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/atharva1407-sys/Medrella_Healthcare.git
-cd Medrella_Healthcare
-```
-
-### 2. Install Dependencies
 ```bash
 npm install
+cp .env.example .env.local     # fill in DATABASE_URL and SARVAM_API_KEY
+npm run db:migrate-0005        # existing database: adds agent + insurance tables (additive only)
+npm run db:migrate-0006        # existing database: adds scheduling dates and recurrence (additive only)
+npm run dev
+npm test                       # all suites, no network needed
 ```
 
-### 3. Configure Environment Variables
-Create a `.env.local` file in the project root:
+For a quick offline run set `DATABASE_URL="disabled-for-local-test"` and `USE_MOCK_PAYMENTS=true`. Open http://localhost:3000/patient/assistant after signing in as a patient.
+
+## Wave & Stream scheduling
+
+A doctor creates sessions on **OPD Sessions & Availability** (`/doctor/availability`). Each session has:
+
+| Setting | Options |
+|---|---|
+| When it runs | **Every week** on a weekday, **date of month** (1–31), or **one date only** |
+| Date range (weekly and monthly only) | Optional "runs from" and "runs until", inclusive |
+| Hours and slot length | Start and end time, slots of 10 minutes to 10 hours, or **one slot for the whole session** (an arrival window such as 10:00–12:00 with 20 patients) |
+| Type and capacity | **Stream** or **Wave**, with 1–20 **patients per slot** (both types) |
+
+A one-date session can be created on several dates at once. Rules: a one-date session can't be in the past; two active sessions of one doctor may not overlap in hours on any date they share; a session with upcoming bookings can't be deleted (switch it off instead); a doctor's leave day still blocks every session on that date; patients can book up to 30 days ahead. Capacity is enforced for new bookings, reschedules and late payments.
+
+## Elastic scheduling
+
+A doctor can stretch or shrink an existing session (Weekly Shifts → edit) by changing its start or end time, **even when appointments are booked**. A live preview lists the slots that are added or removed. Expanding never disturbs a booking. When a change affects booked patients (shrinking past them, or a slot length that leaves them between slots) nothing is saved until the doctor chooses: **move them to the nearest free slot** (default; patients are emailed and anyone who cannot be placed stays booked), **cancel and refund**, or **keep them as booked**. For the demo, `GET /api/dev/seed-elastic-demo` (local in-memory mode only) creates a 9:00–11:00 session with every slot booked (2 slots × 5 seats). Details are in `CHANGES.md`; the rules live in `src/lib/elastic-schedule.ts`.
+
+## Operating it
+
+- **Engagement job.** Call `GET /api/cron/engagement` once a day with `Authorization: Bearer <CRON_SECRET>` (an external scheduler such as cron-job.org; Vercel's free cron is once a day and is also fine here). It queues follow-ups and nudges, then sends whatever is due. Every message has a dedupe key, so running it twice is harmless.
+- **Who gets what.** Follow-ups are operational (sent once, 1–3 days after a completed visit). Check-up reminders and re-engagement are promotional: they are dropped unless the patient opted in on the Settings page, and carry an unsubscribe link.
+- **If the assistant misbehaves.** Check the `agent_events` table for the user (tool calls and errors). If Sarvam is down the chat shows a friendly error and nothing else is affected.
+- **Cost control.** Each message is at most 6 model calls. The rate limit is per user and in memory; set a spending limit on the Sarvam account as well.
+
+## Honest limits
+
+- **The insurer is simulated.** No real insurer, TPA or health-claims exchange is contacted. `InsuranceProvider` is an interface, so a real integration can replace `MockInsuranceProvider` without changing the UI or the agent. Approved pre-auth amounts are shown but **do not yet reduce the payment** at checkout.
+- **The assistant is not a clinician.** It does not diagnose or advise on medicines.
+- **Rate limiting is per server instance** and resets on cold starts.
+- Sarvam's behaviour is not deterministic; the tests use a scripted fake model. A live check against Sarvam confirmed tool use, refusal of prompt-extraction and medicine advice, and native Hindi and Marathi replies, but real-model quality should be spot-checked after model changes.
+
+---
+
+## Task 5 reference (notifications)
+
+A Next.js 16 (App Router, React 19, TypeScript, Tailwind 4) outpatient appointment platform with Drizzle ORM on Neon PostgreSQL.
+
+**Task 5 focuses on Reliable Appointment Notifications (EMAIL ONLY)**. The finished system sends the right email for every appointment event, schedules reminders accurately in Indian Standard Time (`Asia/Kolkata`), eliminates duplicate and stale messages, retries failures with exponential backoff, provides patient preference controls, enforces strict clinical data privacy, and ensures a notification delivery failure never breaks clinical bookings or cancellations.
+
+---
+
+## 📋 Architectural Highlights
+
+### 1. Central Creation & Gating (`src/lib/notifications/create.ts`)
+- All system events (booking, payments, cancellations, refunds, reminders) create outbox records through `createNotification`.
+- **Fail-Safe Isolation**: Notification creation is wrapped in exception safety. Provider network errors or database timeouts never bubble up to break or roll back bookings, cancellations, or payment flows.
+- **Deterministic Deduplication**: Deterministic keys (e.g. `confirm-${appointment.id}`, `remind-${appointment.id}-${offset}`) ensure repeated webhook calls, browser reloads, or action retries never queue duplicate emails.
+- **Preference Gating**: `shouldSend(category, preferences)` gates promotional messages based on patient opt-in consent, while operational messages are always sent for service continuity and patient safety.
+
+### 2. Timezone Precision (`Asia/Kolkata`, IST = UTC+05:30)
+- Vercel and CI servers run in UTC. To avoid off-by-one calendar day shifts or inaccurate reminder delivery, all dates and clock times are calculated in `Asia/Kolkata` (`src/lib/time.ts`).
+- `buildInstantFromKolkataTime(dateStr, timeStr)` builds exact UTC instants regardless of host server clock. Appointments scheduled near midnight (e.g. `00:15 IST` on Nov 1) map strictly to the preceding UTC calendar day (`18:45 UTC` on Oct 31).
+- Reminder offsets are configurable via `REMINDER_OFFSETS_MINUTES` (defaults to `1440,120` = 24h and 2h before consultation). Garbage or invalid values fall back to defaults. Reminders whose calculated send time is in the past are skipped.
+
+### 3. Concurrency Safety & Overlapping Cron Protection
+- When scheduled cron runs overlap (e.g. cold start delays or long sweeps), duplicate sends are prevented:
+  - **PostgreSQL**: `claimPendingNotifications` uses `FOR UPDATE SKIP LOCKED` and advances `scheduled_for` by 5 minutes atomically in the claim transaction.
+  - **In-Memory**: Uses an in-flight claim lock (`inFlightNotificationClaims: Set<string>`) to guarantee each due item is processed by only one worker.
+
+### 4. Retries, Backoff & Fail-Closed Delivery
+- Due items are processed with 3 attempts and exponential-like backoff (5m, 15m).
+- After 3 failed attempts, status transitions to `FAILED` (dead-letter queue) and records sanitized `lastError` details (truncated to 500 characters, no secrets).
+- Once marked `SENT`, notifications are never resent.
+- **Fail Closed in Production**: In production without `RESEND_API_KEY`, messages are not sent and remain `PENDING`/`FAILED`. They are NEVER falsely marked `SENT`. In local development, unset key falls back safely to `ConsoleChannel`.
+
+### 5. Pre-Send Status Recheck
+- Before dispatching `APPOINTMENT_REMINDER`, the dispatcher verifies the appointment status in the database.
+- If the appointment was cancelled, completed, expired, or not booked, the reminder is automatically marked `CANCELLED` and skipped.
+- If the appointment start time has already passed in IST, the reminder is cancelled.
+
+### 6. Clinical Privacy & Non-Clinical Sanitization
+- **Strict Key Stripping**: Any clinical details (`diagnosis`, `symptoms`, `clinicalNotes`, `notes`, `reasonForVisit`, `medicalHistory`, `prescription`, `vitalSigns`) in notification payloads are stripped before rendering.
+- **Cancellation Reason Sanitization**: Only approved non-clinical reasons (`ALLOWED_NON_CLINICAL_REASONS`, such as "Doctor emergency", "Clinic maintenance", "Schedule conflict") are included in email text.
+- **HTML Escaping**: User-supplied strings are escaped (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`) in HTML templates.
+- **Masked Dashboard Emails**: Patient email addresses are masked (`a***@domain.com`) in administrative monitoring and production logs.
+
+### 7. Preferences & 1-Click Expiring Unsubscribe
+- **Settings Page** (`/settings`):
+  - Accessible to both patients and doctors.
+  - Explains mandatory operational emails.
+  - Provides toggle for optional promotional health updates with audit tracking (`consentedAt`).
+- **Unsubscribe Route** (`/unsubscribe?token=...`):
+  - Uses signed HMAC-SHA256 tokens (`src/lib/notifications/unsubscribe-token.ts`) with 30-day expiration.
+  - Verified in constant time (`crypto.timingSafeEqual`).
+  - Allows 1-click opt-out without requiring login.
+
+### 8. Admin Dead-Letter Outbox Dashboard (`/admin/notifications`)
+- Protected by `ADMIN_EMAILS` check; unauthorized visitors receive a `404 Not Found`.
+- Live status metrics: Total, Sent, Pending, Failed, Cancelled.
+- Dead-letter table displaying masked recipient, attempt count, last error, and IST timestamps.
+- "Retry" action calling `requeueNotificationAction(id)` which resets attempts to 0 and status to `PENDING` for immediate redelivery.
+- Manual outbox sweep trigger button for on-demand dispatch.
+
+---
+
+## 🛠️ Environment Configuration (`.env`)
+
+Add the following environment variables to your deployment environment (e.g. Vercel Project Settings) or `.env.local` for development:
 
 ```bash
-# Database (Neon PostgreSQL)
+# Database & Auth
 DATABASE_URL="postgresql://user:password@ep-sample-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+SESSION_SECRET="generate-a-strong-32-byte-secret-key-for-production"
+APP_URL="https://medrella-healthcare.vercel.app"
 
-# Auth Session Secret (Generate with: openssl rand -hex 32)
-SESSION_SECRET="your-32-byte-hex-session-secret"
-APP_URL="http://localhost:3000"
-
-# Admin Access Control (comma-separated list of admin emails)
+# Admin Dashboard Access (comma-separated admin emails)
 ADMIN_EMAILS="admin@rubyhall.com,ops@medrella.com"
 
-# Razorpay Test Gateway Keys
-RAZORPAY_KEY_ID="rzp_test_yourKeyId"
-NEXT_PUBLIC_RAZORPAY_KEY_ID="rzp_test_yourKeyId"
-RAZORPAY_KEY_SECRET="yourKeySecret"
-RAZORPAY_WEBHOOK_SECRET="yourWebhookSecret"
-PAYMENT_HOLD_MINUTES=10
+# Email Provider Configuration (Resend)
+RESEND_API_KEY="re_your_api_key_here"
+EMAIL_FROM="Medrella Healthcare <appointments@rubyhall-pune.medrella.com>"
 
-# Email Notifications (Brevo or Resend)
-EMAIL_PROVIDER="brevo"                  # 'brevo' or 'resend'
-BREVO_API_KEY="xkeysib-yourBrevoApiKey"
-EMAIL_FROM="Medrella Healthcare <appointments@medrella.com>"
+# Reminder Schedule Offsets (in minutes, evaluated in Asia/Kolkata)
+REMINDER_OFFSETS_MINUTES="1440,120"
 
-# Timezone & Reminders (Evaluated in Asia/Kolkata)
-REMINDER_OFFSETS_MINUTES="1440,120"     # 24 hours & 2 hours before visit
-
-# Background Sweeper Secret
-CRON_SECRET="your-secure-cron-secret"
-
-# Healthcare Agent (optional; without a key the assistant says it is not set up)
-SARVAM_API_KEY="your-sarvam-key"
-INSURANCE_PROVIDER="mock"   # enables the simulated insurer in production
+# Cron Sweep Authorization Secret
+CRON_SECRET="your_secure_cron_secret_here"
 ```
 
-> **Zero-Config Local Mock**: If running without a database, set `DATABASE_URL="disabled-for-local-test"` and `USE_MOCK_PAYMENTS=true`. The system will automatically run using seeded in-memory repositories and mock payment flows.
+---
 
-### 4. Apply Database Migrations
+## 🚀 Database Migration (Migration 0004)
+
+The Task 5 migration is **additive only** (new table `notification_preferences`, new columns `category` and `provider_message_id` on `notifications`). It contains zero drop, truncate, or delete operations.
+
+To apply migration 0004 against your PostgreSQL database:
+
 ```bash
-# Push full schema to an empty database
-npm run db:push
-
-# Or run incremental safe additive migrations
-npm run db:migrate-0003
 npm run db:migrate-0004
-npm run db:migrate-0005   # agent + insurance tables
-npm run db:migrate-0006   # scheduling dates
-
-# Seed founding doctors
-npm run db:seed
 ```
 
-### 5. Start the Development Server
+The migration runner prints only the database host for verification and skips tables, columns, or indexes that already exist.
+
+---
+
+## ⏱️ External Scheduler Setup (cron-job.org or Vercel Cron)
+
+Medrella Healthcare exposes two protected endpoints for recurring background processing:
+1. `GET /api/cron/notifications`: Dispatches due notification emails and processes retries.
+2. `GET /api/cron/payments`: Reconciles pending gateway payments and sweeps expired holds.
+
+### Setting up on [cron-job.org](https://cron-job.org):
+1. Create a free account on [cron-job.org](https://cron-job.org).
+2. Create **Job 1 (Notification Outbox Sweeper)**:
+   - **URL**: `https://your-domain.vercel.app/api/cron/notifications`
+   - **Schedule**: Every 1 minute (`* * * * *`)
+   - **Request Headers**:
+     ```http
+     Authorization: Bearer your_cron_secret_here
+     ```
+3. Create **Job 2 (Payment & Expiry Sweeper)**:
+   - **URL**: `https://your-domain.vercel.app/api/cron/payments`
+   - **Schedule**: Every 2 minutes (`*/2 * * * *`)
+   - **Request Headers**:
+     ```http
+     Authorization: Bearer your_cron_secret_here
+     ```
+
+Both endpoints return `503 Service Unavailable` if `CRON_SECRET` is unset in production, and `401 Unauthorized` if an incorrect Bearer token is provided.
+
+---
+
+## 🧪 Automated Verification Suite
+
+Run the full automated test suite, code linter, and production build:
+
 ```bash
-npm run dev
-```
-Open **[http://localhost:3000](http://localhost:3000)** in your browser.
+# Run all tests (clinical suite + payment hardening + reliable notifications)
+npm test
 
----
+# Run ESLint validation
+npm run lint
 
-## ⏱️ Background Cron Sweepers
-
-Medrella Healthcare includes three authenticated endpoints for recurring background operations:
-
-1. **Notification Dispatcher** (`GET /api/cron/notifications`):
-   * Dispatches due outbox emails.
-   * Manages retries with exponential backoff (up to 3 attempts).
-   * Moves continuously failing items to the dead-letter queue.
-   * *Recommended Schedule*: Every 1 minute (`* * * * *`).
-
-2. **Payment & Seat Hold Reconciler** (`GET /api/cron/payments`):
-   * Sweeps expired 10-minute seat holds (`HOLD` ➔ cancelled, releasing slots).
-   * Reconciles captured payments and triggers automated refunds for late payments.
-   * *Recommended Schedule*: Every 2 minutes (`*/2 * * * *`).
-
-3. **Patient Engagement** (`GET /api/cron/engagement`):
-   * Queues follow-up emails after completed visits and opt-in check-up / re-engagement reminders.
-   * Safe to run repeatedly (every message has a dedupe key).
-   * *Recommended Schedule*: Once a day (`0 9 * * *`).
-
-### Setting Up on [cron-job.org](https://cron-job.org) or Vercel Cron:
-Add the `Authorization` header to your cron job request:
-```http
-Authorization: Bearer <your_CRON_SECRET_here>
+# Compile production bundle
+npm run build
 ```
 
----
+### Test Suite Summary:
+- **`src/test-suite.ts`**: 115 tests passing (clinical rules, wave scheduling, double-booking guard).
+- **`src/test-payment-hardening.ts`**: 72 tests passing (Razorpay webhook verification, signature validation, hold expiry, tiered refund calculation).
+- **`src/test-notifications.ts`**: 81 tests passing:
+  1. Event map coverage across all 10 notification templates.
+  2. Deduplication key uniqueness in memory and PostgreSQL.
+  3. Asia/Kolkata reminder calculation (including midnight boundary and UTC server clock).
+  4. Pre-send status recheck cancelling reminders for cancelled/completed visits.
+  5. Retries and backoff (3 attempts -> FAILED, never resending SENT).
+  6. Overlapping dispatcher sweep safety (0 duplicate sends).
+  7. Provider error isolation (notification failure never breaks booking/cancel).
+  8. Preferences, consent audit, and HMAC-SHA256 unsubscribe token lifecycle.
+  9. Privacy enforcement (stripping diagnosis, symptoms, notes; XSS HTML escaping).
+  10. Admin dashboard access control and dead-letter requeue action.
+  11. Production fail-closed behavior when `RESEND_API_KEY` is missing.
 
-## 👤 Demo Accounts & Test Credentials
-
-### Pre-Seeded Doctor Accounts:
-All doctors use password: **`Doctor@123`**
-
-| Doctor | Specialization | Login Email | Consultation Fee |
-|:---|:---|:---|:---:|
-| **Dr. Rohan Mehta** | Cardiology | `dr.rohan.mehta@medrella.com` | ₹800 |
-| **Dr. Priya Nair** | Neurology | `dr.priya.nair@medrella.com` | ₹900 |
-| **Dr. Arjun Rao** | Orthopedics | `dr.arjun.rao@medrella.com` | ₹750 |
-| **Dr. Ananya Sharma** | Pediatrics | `dr.ananya.sharma@medrella.com` | ₹600 |
-| **Dr. Vikram Iyer** | Oncology | `dr.vikram.iyer@medrella.com` | ₹1,200 |
-| **Dr. Meera Krishnan**| Dermatology | `dr.meera.krishnan@medrella.com` | ₹700 |
-| **Dr. Kavya Menon** | Gynecology | `dr.kavya.menon@medrella.com` | ₹800 |
-| **Dr. Sandeep Kulkarni**| General Medicine | `dr.sandeep.kulkarni@medrella.com`| ₹500 |
-
-### Razorpay Test Payment Methods:
-Use these credentials in the checkout popup (no real money charged):
-
-* **Visa Domestic Card**: `4718 6091 0820 4366` | Expiry: `12/28` | CVV: `123`
-* **Mastercard Domestic Card**: `5267 3181 8797 5449` | Expiry: `12/28` | CVV: `123`
-* **Test UPI ID**: `success@razorpay` *(instant automated approval)*
-* **Test Netbanking**: Select any bank (HDFC, SBI, ICICI) and click **Success** on the mock portal.
-
----
-
-## 📄 License & Attribution
-
-Developed for **Pearl Thoughts** Full Stack Development Assessment by **Atharva Mandlik**.  
-Designed for **Medrella Healthcare, Ruby Hall, Pune**. All rights reserved.
+**Total: 268 passed, 0 failed.**
