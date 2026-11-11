@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   createSessionAction,
@@ -25,6 +25,7 @@ import {
 import type { AvailabilityEntity, DoctorLeaveEntity } from "@/db/repo";
 import { describeSchedule, recurrenceOf, type DayCode, type SessionRecurrence } from "@/lib/session-schedule";
 import { istDateString } from "@/lib/time";
+import { analyzeSessionChange, effectiveSlotLength, type BookingResolution, type SessionChangeImpact } from "@/lib/elastic-schedule";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -154,6 +155,9 @@ export function SessionsClient({ initialSessions, initialLeaves, doctorId }: Ses
   const [leaveReason, setLeaveReason] = useState("");
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Set when an edit affects booked appointments: the doctor must choose what happens to them.
+  const [pendingResolution, setPendingResolution] = useState<SessionChangeImpact | null>(null);
+  const [resolution, setResolution] = useState<BookingResolution>("MOVE");
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const today = istDateString(new Date());
@@ -206,6 +210,8 @@ export function SessionsClient({ initialSessions, initialLeaves, doctorId }: Ses
     setPatientsPerSlot(session.patientsPerWave || 1);
     setIsActive(session.isActive);
     setErrorMessage(null);
+    setPendingResolution(null);
+    setResolution("MOVE");
     setIsModalOpen(true);
   };
 
@@ -216,8 +222,45 @@ export function SessionsClient({ initialSessions, initialLeaves, doctorId }: Ses
     setSchedulingType(next);
   };
 
+  // The slot length that will actually be saved. Extending a "one slot for the whole session" session keeps
+  // its current slot, so the people already booked in it stay where they are.
+  const savedSlotLength = effectiveSlotLength({
+    editing: editingSession
+      ? { startTime: editingSession.startTime, endTime: editingSession.endTime, slotDurationMinutes: editingSession.slotDurationMinutes }
+      : null,
+    startTime,
+    endTime,
+    slotLength: slotDurationMinutes,
+    wholeSession,
+  });
+  const keepsSlotOnExtend = wholeSession && savedSlotLength !== minutesBetween(startTime, endTime);
+
+  // Live preview while editing: which slots the new hours add or remove (bookings are checked on the server).
+  const slotPreview = useMemo(() => {
+    if (!editingSession) return null;
+    if (!(minutesBetween(startTime, endTime) > 0) || savedSlotLength < 1) return null;
+    return analyzeSessionChange(
+      {
+        startTime: editingSession.startTime,
+        endTime: editingSession.endTime,
+        slotDurationMinutes: editingSession.slotDurationMinutes,
+      },
+      { startTime, endTime, slotDurationMinutes: savedSlotLength },
+      []
+    );
+  }, [editingSession, startTime, endTime, savedSlotLength]);
+
+  // Any change to the form invalidates a pending "what should happen to these bookings" choice.
+  useEffect(() => {
+    setPendingResolution(null);
+  }, [startTime, endTime, slotDurationMinutes, wholeSession, recurrence, dayOfWeek, dayOfMonth, specificDate, validFrom, validUntil, isActive]);
+
   const handleSaveSession = (e: React.FormEvent) => {
     e.preventDefault();
+    submitSession(null);
+  };
+
+  const submitSession = (chosenResolution: BookingResolution | null) => {
     setErrorMessage(null);
     setSuccessMessage(null);
 
@@ -244,20 +287,24 @@ export function SessionsClient({ initialSessions, initialLeaves, doctorId }: Ses
     }
     formData.append("startTime", startTime);
     formData.append("endTime", endTime);
-    formData.append("slotDurationMinutes", String(wholeSession ? windowMinutes : slotDurationMinutes));
+    formData.append("slotDurationMinutes", String(savedSlotLength));
     formData.append("schedulingType", schedulingType);
     formData.append("patientsPerWave", patientsPerSlot.toString());
     formData.append("isActive", isActive ? "true" : "false");
+    if (chosenResolution) formData.append("bookingResolution", chosenResolution);
 
     startTransition(async () => {
-      const res = editingSession
-        ? await updateSessionAction(formData)
-        : await createSessionAction(formData);
+      const res: { success: boolean; message?: string; error?: string; needsResolution?: boolean; impact?: SessionChangeImpact } =
+        editingSession ? await updateSessionAction(formData) : await createSessionAction(formData);
 
       if (res.success) {
         setSuccessMessage(res.message || "Session saved!");
+        setPendingResolution(null);
         setIsModalOpen(false);
         router.refresh();
+      } else if (res.needsResolution && res.impact) {
+        // The edit affects booked appointments: nothing is saved until the doctor says what happens to them.
+        setPendingResolution(res.impact);
       } else {
         setErrorMessage(res.error || "Failed to save session.");
       }
@@ -827,6 +874,121 @@ export function SessionsClient({ initialSessions, initialLeaves, doctorId }: Ses
                   Active (Patients can book appointments during this session)
                 </Label>
               </div>
+
+              {editingSession && slotPreview && slotPreview.change !== "NONE" && (
+                <div className="p-3 rounded-xl border border-blue-200 bg-blue-50 text-blue-900 space-y-1" data-testid="elastic-preview">
+                  <div className="font-bold">
+                    {slotPreview.change === "EXPANDED"
+                      ? "Extending this session"
+                      : slotPreview.change === "SHRUNK"
+                        ? "Shortening this session"
+                        : "Changing this session"}
+                    {": "}
+                    {editingSession.startTime}–{editingSession.endTime} → {startTime}–{endTime}
+                  </div>
+                  <div>{slotPreview.summary}</div>
+                  {keepsSlotOnExtend && (
+                    <div className="text-[10px] text-blue-700">
+                      The current slot length ({savedSlotLength} minutes) is kept, so people already booked stay in their
+                      slot and the extra time becomes new slots. Extend by a full slot to add seats.
+                    </div>
+                  )}
+                  <div className="text-[10px] text-blue-700">
+                    Booked appointments stay as they are. If the change affects any, you choose what happens to them
+                    before anything is saved.
+                  </div>
+                </div>
+              )}
+
+              {pendingResolution && (
+                <div className="p-3 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 space-y-3" role="alert" data-testid="elastic-confirm">
+                  <div className="font-bold">
+                    {pendingResolution.affectedBookings.length} booked{" "}
+                    {pendingResolution.affectedBookings.length === 1 ? "appointment is" : "appointments are"} affected by the new hours
+                  </div>
+                  <ul className="list-disc pl-4 space-y-0.5" data-testid="elastic-affected">
+                    {pendingResolution.affectedBookings.slice(0, 5).map((b) => (
+                      <li key={b.id}>
+                        {b.appointmentDate} at {b.startTime}
+                        {b.patientName ? ` · ${b.patientName}` : ""}
+                      </li>
+                    ))}
+                    {pendingResolution.affectedBookings.length > 5 && (
+                      <li>and {pendingResolution.affectedBookings.length - 5} more</li>
+                    )}
+                  </ul>
+                  <fieldset className="space-y-1.5" data-testid="elastic-options">
+                    <legend className="font-bold mb-1">What should happen to them?</legend>
+                    {(
+                      [
+                        {
+                          value: "MOVE" as const,
+                          title: "Move to the nearest free slot (recommended)",
+                          text: !pendingResolution.relocationPreview
+                            ? "Same day first, then the next days. Patients get an email. Anyone who cannot be placed stays booked as before."
+                            : pendingResolution.relocationPreview.movable === 0
+                              ? "Every other slot is full, so none of them can be moved. They would stay booked as before."
+                              : pendingResolution.relocationPreview.stuck === 0
+                                ? `All ${pendingResolution.relocationPreview.movable} can be moved (same day first, then the next days). Patients get an email.`
+                                : `${pendingResolution.relocationPreview.movable} can be moved (patients get an email). ${pendingResolution.relocationPreview.stuck} have no free slot and would stay booked as before.`,
+                        },
+                        {
+                          value: "CANCEL" as const,
+                          title: "Cancel and refund",
+                          text: "Patients are cancelled by you, any payment is refunded in full, and they are emailed.",
+                        },
+                        {
+                          value: "KEEP" as const,
+                          title: "Keep as booked",
+                          text: "They keep their original time, outside the new hours. New patients can only book the new slots.",
+                        },
+                      ]
+                    ).map((o) => (
+                      <label
+                        key={o.value}
+                        className={`flex items-start gap-2 rounded-lg border p-2 cursor-pointer ${
+                          resolution === o.value ? "border-amber-500 bg-white" : "border-amber-200 bg-amber-50"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="bookingResolution"
+                          value={o.value}
+                          checked={resolution === o.value}
+                          onChange={() => setResolution(o.value)}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="block font-semibold">{o.title}</span>
+                          <span className="block text-[10px] font-normal">{o.text}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </fieldset>
+                  <Button
+                    variant="default"
+                    type="button"
+                    disabled={isPending}
+                    onClick={() => submitSession(resolution)}
+                    className={`px-4 py-2 font-bold cursor-pointer ${resolution === "CANCEL" ? "bg-red-600 hover:bg-red-700" : ""}`}
+                  >
+                    {resolution === "MOVE"
+                      ? pendingResolution.relocationPreview?.movable === 0
+                        ? "Apply the change (they stay booked)"
+                        : "Move them and apply the change"
+                      : resolution === "CANCEL"
+                        ? `Cancel ${pendingResolution.affectedBookings.length} and apply the change`
+                        : "Keep them and apply the change"}
+                  </Button>
+                </div>
+              )}
+
+              {errorMessage && (
+                <div className="p-3 rounded-xl border border-red-200 bg-red-50 text-red-700 flex items-start gap-2" role="alert" data-testid="session-modal-error">
+                  <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
 
               <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
                 <Button variant="outline"

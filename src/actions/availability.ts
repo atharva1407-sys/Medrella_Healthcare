@@ -4,6 +4,108 @@ import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "./auth";
 import { dbRepo } from "@/db/repo";
 import { sessionSchema } from "@/lib/validators";
+import {
+  isBookingResolution,
+  isSessionChangeBlocked,
+  resolveAffectedBookings,
+  type ElasticBooking,
+  type FreeSlot,
+  type ResolutionDeps,
+} from "@/lib/elastic-schedule";
+import { MAX_BOOKING_DAYS_AHEAD } from "@/lib/booking-rules";
+import { addDaysToDate } from "@/lib/session-schedule";
+import { istDateString } from "@/lib/time";
+import { createNotification, processDueNotifications, updateRescheduledReminders } from "@/lib/notifications";
+import { runInBackground } from "@/lib/background";
+import { cancelAppointmentAction } from "./appointments";
+
+/**
+ * Moves one appointment to a free slot as the doctor, and tells the PATIENT (not the doctor who made the
+ * edit) by email, with their reminders re-planned for the new time.
+ */
+async function moveBookingForDoctor(
+  doctorUserId: string,
+  booking: ElasticBooking,
+  target: FreeSlot
+): Promise<{ ok: boolean; message?: string }> {
+  const result = await dbRepo.rescheduleAppointment({
+    appointmentId: booking.id,
+    newDate: target.date,
+    newStartTime: target.startTime,
+    newEndTime: target.endTime,
+    newSessionId: target.sessionId,
+    actorUserId: doctorUserId,
+    actorRole: "DOCTOR",
+  });
+  if (!result.success || !result.appointment) return { ok: false, message: result.message };
+
+  const moved = result.appointment;
+  const doctor = await dbRepo.getDoctorById(moved.doctorId);
+  const patient = await dbRepo.getPatientById(moved.patientId);
+  const patientUser = patient ? await dbRepo.getUserById(patient.userId) : undefined;
+  if (doctor && patient && patientUser) {
+    const patientName = `${patient.firstName} ${patient.lastName}`;
+    await updateRescheduledReminders(dbRepo, moved, patientUser.email, patientUser.id, patientName, doctor);
+    await createNotification(dbRepo, {
+      userId: patientUser.id,
+      appointmentId: moved.id,
+      channel: "EMAIL",
+      template: "APPOINTMENT_RESCHEDULED",
+      recipient: patientUser.email,
+      payload: {
+        patientName,
+        doctorName: `${doctor.firstName} ${doctor.lastName}`,
+        specialization: doctor.specialization || "Specialist",
+        // The email template reads these three, so the subject and body show the NEW date, time and token.
+        appointmentDate: moved.appointmentDate,
+        startTime: moved.startTime,
+        tokenNumber: moved.tokenNumber,
+        newAppointmentDate: moved.appointmentDate,
+        newStartTime: moved.startTime,
+        newEndTime: moved.endTime,
+        newTokenNumber: moved.tokenNumber,
+        previousDate: booking.appointmentDate,
+        previousTime: booking.startTime,
+      },
+      dedupeKey: `reschedule-${moved.id}-${moved.appointmentDate}-${moved.startTime}`,
+    });
+  }
+  return { ok: true };
+}
+
+/** Applies the doctor's MOVE / CANCEL choice to the bookings the schedule edit affected. */
+async function resolveBookings(
+  user: { userId: string; profileId: string },
+  resolution: "KEEP" | "MOVE" | "CANCEL",
+  affected: ElasticBooking[]
+) {
+  const today = istDateString(new Date());
+  const deps: ResolutionDeps = {
+    freeSlots: async (date) => {
+      const { groups } = await dbRepo.computeSessionGroups(user.profileId, date);
+      return groups.flatMap((g) =>
+        g.slots
+          .filter((s) => !s.isBooked && s.seatsLeft > 0)
+          .map((s) => ({ date, sessionId: g.sessionId, startTime: s.startTime, endTime: s.endTime, seatsLeft: s.seatsLeft }))
+      );
+    },
+    move: (booking, target) => moveBookingForDoctor(user.userId, booking, target),
+    cancel: async (booking) => {
+      const res = await cancelAppointmentAction(booking.id);
+      return res.success ? { ok: true } : { ok: false, message: "error" in res ? res.error : undefined };
+    },
+  };
+  const outcome = await resolveAffectedBookings(resolution, affected, deps, {
+    today,
+    lastBookableDate: addDaysToDate(today, MAX_BOOKING_DAYS_AHEAD),
+  });
+  if (outcome.moved.length > 0) {
+    runInBackground(async () => {
+      await processDueNotifications(dbRepo);
+    });
+  }
+  return outcome;
+}
 
 /** Reads the OPD session form: timing, scheduling type, per-slot capacity and when the session runs. */
 function readSessionForm(formData: FormData) {
@@ -135,29 +237,61 @@ export async function updateSessionAction(formData: FormData) {
     return { success: false, error: parsed.error.issues[0].message };
   }
 
+  const rawResolution = formData.get("bookingResolution");
+  const resolution = isBookingResolution(rawResolution) ? rawResolution : undefined;
+
   try {
     // Scoped to the signed-in doctor: another doctor's session id is treated as not found.
-    const session = await dbRepo.updateAvailabilitySession(user.profileId, sessionId, {
-      name: parsed.data.name,
-      recurrence: parsed.data.recurrence,
-      dayOfWeek: parsed.data.dayOfWeek ?? null,
-      dayOfMonth: parsed.data.dayOfMonth ?? null,
-      specificDate: parsed.data.specificDate ?? null,
-      validFrom: parsed.data.validFrom ?? null,
-      validUntil: parsed.data.validUntil ?? null,
-      startTime: parsed.data.startTime,
-      endTime: parsed.data.endTime,
-      slotDurationMinutes: parsed.data.slotDurationMinutes,
-      isActive: parsed.data.isActive,
-      schedulingType: parsed.data.schedulingType,
-      patientsPerWave: parsed.data.patientsPerWave,
-    });
+    const { session, impact } = await dbRepo.updateAvailabilitySessionWithImpact(
+      user.profileId,
+      sessionId,
+      {
+        name: parsed.data.name,
+        recurrence: parsed.data.recurrence,
+        dayOfWeek: parsed.data.dayOfWeek ?? null,
+        dayOfMonth: parsed.data.dayOfMonth ?? null,
+        specificDate: parsed.data.specificDate ?? null,
+        validFrom: parsed.data.validFrom ?? null,
+        validUntil: parsed.data.validUntil ?? null,
+        startTime: parsed.data.startTime,
+        endTime: parsed.data.endTime,
+        slotDurationMinutes: parsed.data.slotDurationMinutes,
+        isActive: parsed.data.isActive,
+        schedulingType: parsed.data.schedulingType,
+        patientsPerWave: parsed.data.patientsPerWave,
+      },
+      { resolution }
+    );
+
+    // The new hours are saved. Now deal with the appointments they affect, as the doctor chose.
+    let resolutionSummary = "";
+    if (session.isActive && impact.affectedBookings.length > 0 && resolution) {
+      const outcome = await resolveBookings(user, resolution, impact.affectedBookings);
+      resolutionSummary = outcome.summary;
+    }
 
     revalidatePath("/doctor/dashboard");
     revalidatePath("/doctor/availability");
     revalidatePath(`/doctors/${user.profileId}`);
-    return { success: true, message: "OPD Session updated successfully!", session };
+    revalidatePath("/doctors");
+    revalidatePath("/patient/dashboard");
+    revalidatePath("/queue");
+    return {
+      success: true,
+      message: `OPD Session updated successfully! ${impact.summary} ${resolutionSummary}`.replace(/\s+/g, " ").trim(),
+      session,
+      impact,
+    };
   } catch (err: any) {
+    if (isSessionChangeBlocked(err)) {
+      // Not a crash: nothing was saved, and the doctor has to choose what happens to the affected bookings.
+      return {
+        success: false,
+        error: err.message,
+        needsResolution: true,
+        impact: err.impact,
+      };
+    }
     return { success: false, error: err.message || "Failed to update session." };
   }
 }
