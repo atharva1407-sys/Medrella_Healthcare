@@ -82,14 +82,14 @@ Open the **[live app](https://medrella-healthcare.vercel.app)** and follow along
 
 ## ✅ Tests
 
-**753 automated checks in 11 suites**, plus real-PostgreSQL concurrency tests and Playwright end-to-end tests, all run by GitHub Actions on every push.
+**772 automated checks in 11 suites**, plus real-PostgreSQL concurrency tests and Playwright end-to-end tests, all run by GitHub Actions on every push.
 
 | Area | Suites | Checks |
 |---|---|:---:|
 | Clinic rules, slots, queue, leave | `test-suite` | 115 |
 | Payments, webhooks, refunds | `test-payment-hardening` | 72 |
 | Notifications and email outbox | `test-notifications`, `test-brevo-welcome` | 112 |
-| AI assistant, tools, voice detection | `test-agent`, `test-assistant` | 171 |
+| AI assistant, tools, voice detection | `test-agent`, `test-assistant` | 190 |
 | Scheduling, timezones, elastic sessions | `test-scheduling`, `test-timezone`, `test-elastic` | 223 |
 | Concurrency and appointment lifecycle | `test-phase1-hardening`, `test-phase3-lifecycle` | 60 |
 
