@@ -83,9 +83,12 @@ npm run build
 1. Push your branch or connect your repository in Vercel.
 2. In **Project Settings -> Environment Variables**, configure all variables from Section 2.
 3. Deploy the project.
-4. Verify that `vercel.json` automatically registers the cron jobs:
-   - `/api/cron/payments` every 5 minutes (`*/5 * * * *`)
-   - `/api/cron/notifications` every 1 minute (`* * * * *`)
+4. Verify that `vercel.json` automatically registers the cron jobs (all daily, UTC):
+   - `/api/cron/notifications` at 02:00 (`0 2 * * *`)
+   - `/api/cron/payments` at 02:30 (`30 2 * * *`)
+   - `/api/cron/engagement` at 09:00 (`0 9 * * *`)
+
+   > **Vercel Hobby limit:** the free Hobby plan only accepts cron jobs that run **at most once per day**. A schedule such as `* * * * *` or `*/10 * * * *` makes the whole deployment fail, and the site keeps serving the last successful build. Booking confirmations and receipts are still sent right after each action; the daily notification run is a backstop for reminders. For more frequent runs, use the Pro plan or call the endpoints from an external scheduler with the header `Authorization: Bearer <CRON_SECRET>`.
 
 ### Step 7: Alternative — Deploy with Docker Container
 Build and launch using standard container tooling:
