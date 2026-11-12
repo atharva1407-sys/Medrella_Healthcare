@@ -54,7 +54,18 @@ jobs:
           NODE_ENV: test
           SESSION_SECRET: test_session_secret_at_least_32_characters_long_for_security
           CRON_SECRET: test_cron_secret_for_scheduled_tasks
-        run: npm test
+        run: |
+          npx tsx src/test-suite.ts
+          npx tsx src/test-payment-hardening.ts
+          npx tsx src/test-notifications.ts
+          npx tsx src/test-brevo-welcome.ts
+          npx tsx src/test-agent.ts
+          npx tsx src/test-assistant.ts
+          npx tsx src/test-timezone.ts
+          npx tsx src/test-scheduling.ts
+          npx tsx src/test-elastic.ts
+          npx tsx src/test-phase1-hardening.ts
+          npx tsx src/test-phase3-lifecycle.ts
 
       - name: Run PostgreSQL Migrations with Connection-Pinned Advisory Lock
         env:
