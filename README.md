@@ -1,24 +1,24 @@
 <div align="center">
 
-# 🏥 Medrella Healthcare — Outpatient Platform & AI Assistant
+# 🏥 Medrella Healthcare — Enterprise Outpatient Platform & AI Clinical Assistant
 
 <p align="center">
   <img src="public/images/tech-stack.png" alt="Medrella Healthcare Tech Stack & Architecture" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://nextjs.org"><img src="https://img.shields.io/badge/Next.js_16.4-000000?style=flat&logo=nextdotjs&logoColor=white" alt="Next.js" /></a>
-  <a href="https://react.dev"><img src="https://img.shields.io/badge/React_19-20232A?style=flat&logo=react&logoColor=61DAFB" alt="React" /></a>
-  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript_5-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript" /></a>
-  <a href="https://tailwindcss.com"><img src="https://img.shields.io/badge/Tailwind_4.0-06B6D4?style=flat&logo=tailwindcss&logoColor=white" alt="Tailwind CSS" /></a>
-  <a href="https://orm.drizzle.team"><img src="https://img.shields.io/badge/Drizzle_ORM-C5F74F?style=flat&logo=drizzle&logoColor=000000" alt="Drizzle ORM" /></a>
-  <a href="https://neon.tech"><img src="https://img.shields.io/badge/Neon_Postgres-00E599?style=flat&logo=postgresql&logoColor=0B0D0E" alt="Neon Postgres" /></a>
-  <a href="https://razorpay.com"><img src="https://img.shields.io/badge/Razorpay_Sandbox-02042B?style=flat&logo=razorpay&logoColor=3395FF" alt="Razorpay" /></a>
-  <a href="https://www.sarvam.ai"><img src="https://img.shields.io/badge/Sarvam_AI_Voice-FF6F00?style=flat&logo=probot&logoColor=white" alt="Sarvam AI" /></a>
-  <a href="https://medrella-healthcare.vercel.app"><img src="https://img.shields.io/badge/Live_on_Vercel-000000?style=flat&logo=vercel&logoColor=white" alt="Vercel" /></a>
+  <a href="https://nextjs.org"><img src="https://img.shields.io/badge/Next.js_16.4-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" alt="Next.js 16.4" /></a>
+  <a href="https://react.dev"><img src="https://img.shields.io/badge/React_19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" alt="React 19" /></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript_5-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript 5" /></a>
+  <a href="https://tailwindcss.com"><img src="https://img.shields.io/badge/Tailwind_4.0-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind 4" /></a>
+  <a href="https://orm.drizzle.team"><img src="https://img.shields.io/badge/Drizzle_ORM-C5F74F?style=for-the-badge&logo=drizzle&logoColor=000000" alt="Drizzle ORM" /></a>
+  <a href="https://neon.tech"><img src="https://img.shields.io/badge/PostgreSQL_16-00E599?style=for-the-badge&logo=postgresql&logoColor=0B0D0E" alt="PostgreSQL 16" /></a>
+  <a href="https://razorpay.com"><img src="https://img.shields.io/badge/Razorpay_Gateway-02042B?style=for-the-badge&logo=razorpay&logoColor=3395FF" alt="Razorpay" /></a>
+  <a href="https://www.sarvam.ai"><img src="https://img.shields.io/badge/Sarvam_AI_Voice-FF6F00?style=for-the-badge&logo=probot&logoColor=white" alt="Sarvam AI" /></a>
+  <a href="https://playwright.dev"><img src="https://img.shields.io/badge/Playwright_E2E-2EAD33?style=for-the-badge&logo=playwright&logoColor=white" alt="Playwright E2E" /></a>
 </p>
 
-Full-stack outpatient clinical management platform featuring an **AI Assistant for Patients & Doctors** (voice & text), **Elastic Scheduling**, **Prescription Management**, and **Reliable Outbox Notifications** for **Medrella Healthcare, Ruby Hall, Pune, Maharashtra**.
+Enterprise-grade outpatient clinical management platform featuring an **AI Clinical Assistant for Patients & Doctors** (voice & text), **Modular Repository Architecture**, **PostgreSQL Advisory-Locked Concurrency**, **Elastic OPD Scheduling**, and **Reliable Outbox Notifications** for **Medrella Healthcare, Ruby Hall, Pune, Maharashtra**.
 
 🚀 **Live Production Application**: [https://medrella-healthcare.vercel.app](https://medrella-healthcare.vercel.app)
 
@@ -26,94 +26,282 @@ Full-stack outpatient clinical management platform featuring an **AI Assistant f
 
 ---
 
-## 💎 Platform Core Innovations
+## 📑 Table of Contents
 
-> [!NOTE]
-> ### 🤖 AI Assistant for Patients & Doctors (Floating Chat on Dashboards)
-> **Text or voice, English / Hindi / Marathi / Hinglish** · Powered by Sarvam AI (`sarvam-105b-conversations`) with speech-to-text. The assistant performs **real clinical actions** (slots, bookings, payments, refunds, prescriptions) through validated server actions. **Every booking, cancellation and reschedule requires an explicit Confirm press** on a signed, 5-minute, single-use token card. Emergency keywords (English, Hindi, Marathi, Hinglish) route straight to **112** without contacting the model.
-
-> [!TIP]
-> ### 📅 Elastic Session Scheduling (`src/lib/elastic-schedule.ts`)
-> **Dynamic Clinic Hours** · Doctors can stretch or shrink existing OPD sessions (Weekly Shifts → Edit) **even when appointments are booked**. Live preview calculates added or removed slots. If hours shrink past booked patients, doctors choose: **Move to Nearest Slot** (default), **Cancel & Refund**, or **Keep as Booked**.
-
-> [!IMPORTANT]
-> ### 📩 Proactive Patient Engagement Jobs (`/api/cron/engagement`)
-> **Care Follow-Up & Retention** · Automated cron jobs run daily: post-visit follow-ups sent after consultation completion, preventive care reminders (90 days), and patient re-engagement nudges (180 days). Promotional messages are strictly gated by patient opt-in preferences.
-
----
-
-## 🧭 Assistant Pipeline & Safety Architecture
-
-| Step | Component | Safety & Privacy Implementation |
-|:---:|---|---|
-| **1** | **Request** | Signed-in patients **or doctors** only, same-origin check, rate limit of 20 messages per 10 minutes. Session context is extracted from signed HTTP-only cookies, never from client body. |
-| **2** | **Emergency Filter** | English, Hindi, Marathi, and Hinglish keywords route to **112 Emergency Care** instantly before reaching the LLM. |
-| **3** | **Role-Scoped Tools** | The caller's session role dictates available tools: doctors cannot call patient booking tools, and patients cannot call doctor schedule tools. Arguments validated with Zod. |
-| **4** | **Propose, Then Confirm** | Mutating actions (`propose_booking`, `propose_cancel_appointment`, `propose_reschedule_appointment`) produce a HMAC-signed card (5-minute expiration, single-use). No DB state changes occur until the patient presses **Confirm**. |
-| **5** | **Atomic Revalidation** | `POST /api/agent/confirm` verifies cryptographic token integrity, re-checks slot availability, doctor status, and user ownership against live PostgreSQL before executing the transaction. |
-| **6** | **Payment & Holds** | Paid visits hold the slot and render a secure **payment card** in chat (Razorpay Gateway / Test Mode). Expired or abandoned payments release held slots automatically. |
-| **7** | **Audit Trail** | All tool calls, confirmations, and errors are recorded in `agent_events` with sanitized identifiers; PHI (names, emails, phone numbers) is never logged. |
+- [Architectural Overview](#-architectural-overview)
+- [Key Production Hardening Innovations](#-key-production-hardening-innovations)
+- [AI Clinical Assistant Pipeline & Safety](#-ai-clinical-assistant-pipeline--safety)
+- [Elastic Session Scheduling](#-elastic-session-scheduling)
+- [Directory & Project Structure](#-directory--project-structure)
+- [Getting Started & Local Setup](#-getting-started--local-setup)
+- [Verification & Automated Test Suite](#-verification--automated-test-suite)
+- [CI/CD Pipeline](#-cicd-pipeline)
+- [Operational Documentation Hub](#-operational-documentation-hub)
+- [Clinical Facility & Compliance](#-clinical-facility--compliance)
 
 ---
 
-## 🛠️ Tool Catalog & Clinical Features
+## 🏛️ Architectural Overview
 
-### Patient Tools (Assistant)
-| Tool | Clinical Purpose |
-|---|---|
-| `search_doctors` | Find specialists by name, clinical department, consultation fee, or experience. |
-| `get_open_slots` | Retrieve real-time available consultation slots formatted as interactive chips. |
-| `suggest_alternative_slots` | Suggest nearest alternative slots when a requested time is unavailable. |
-| `list_my_appointments` | Query upcoming, past, or cancelled patient appointments. |
-| `propose_booking` / `propose_cancel_appointment` / `propose_reschedule_appointment` | Generate a 2-step signed confirmation card with refund calculation. |
-| `list_my_payments` | Display payment transaction history and refund processing status. |
-| `list_my_prescriptions` | View active clinical prescriptions and doctor dosage instructions. |
+Medrella Healthcare is architected for clinical reliability, zero double-booking, and resilient high-concurrency patient access:
 
-### Doctor Tools (Assistant)
-| Tool | Clinical Purpose |
-|---|---|
-| `get_my_appointments` | View daily OPD consultation schedule filtered by status (`BOOKED`, `COMPLETED`). |
-| `get_appointment_stats` | Real-time counts of patient visits, completed consultations, and cancellations. |
-| `get_my_schedule` | Inspect working shifts, recurring patterns, and clinical leave dates. |
-| `find_schedule_conflicts` | Detect overlapping sessions, overbooked slots, or leave day collisions. |
-| `get_my_open_slots` | Check available open capacity for a designated clinic day. |
-| `suggest_reschedule_slots` | Propose optimal open slots to reschedule existing patient visits. |
-
----
-
-## 🔄 Elastic Scheduling Resolution Options
-
-When editing session hours that affect booked patients, the system requires an explicit clinical resolution:
-
-| Resolution Strategy | Clinical Behavior | Notification & Refund |
-|---|---|---|
-| **Move to Nearest Slot** *(Default)* | Re-assigns booked patients to the closest available slot within the new session hours. | Patients are notified of their new time via email outbox. |
-| **Cancel & Refund** | Cancels affected bookings and triggers an automated 100% full refund via the payment gateway. | Cancellation and refund confirmation emails are queued immediately. |
-| **Keep as Booked** | Preserves existing appointments at their original times even if outside standard shift bounds. | Existing booking confirmation remains unchanged. |
-
----
-
-## ⚡ Verification & Test Suite
-
-```bash
-cd Task_6
-npm install
-npm test                  # Runs 489 automated tests across 11 suites (zero network needed)
-npm run test:pg           # Runs real PostgreSQL concurrency and advisory lock tests
-npm run build             # Turbopack production build
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Next.js 16 App Router UI                        │
+│   Landing Page • Patient Portal • Doctor Schedule • Voice Assistant    │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Server Actions & API Routes
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Lightweight Repo Facade                         │
+│                           src/db/repo.ts                               │
+└───────┬──────────────┬──────────────┬──────────────┬───────────┬───────┘
+        │              │              │              │           │
+        ▼              ▼              ▼              ▼           ▼
+  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌───────────┐ ┌───────────┐
+  │User Repo   │ │Doctor Repo │ │Appointment │ │Billing    │ │Notif      │
+  │            │ │            │ │Repo (Locks)│ │Repo(Idemp)│ │Repo(DLQ)  │
+  └─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └─────┬─────┘ └─────┬─────┘
+        │              │              │              │             │
+        └──────────────┴───────┬──────┴──────────────┴─────────────┘
+                               ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                   Shared RepositoryContext (Drizzle)                   │
+│    Neon Serverless Pool • Advisory Locks • Transactions • Fallback     │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-| Test Suite | Tests | Result | Verification Scope |
-|---|:---:|:---:|---|
-| **`src/test-suite.ts`** | **115** | **Passed** | Clinical rules, wave/stream capacity, token sequences, and double-booking guard. |
-| **`src/test-payment-hardening.ts`** | **72** | **Passed** | Razorpay webhooks, signature verification, seat holds, and tiered refund engine. |
-| **`src/test-notifications.ts`** | **81** | **Passed** | Outbox deduplication, IST midnight calculations, PHI redaction, and DLQ retries. |
-| **`src/test-brevo-welcome.ts`** | **31** | **Passed** | Welcome notification pipeline, template escaping, and non-blocking delivery. |
-| **`src/test-agent.ts`** | **72** | **Passed** | Sarvam AI tool calling, safety checks, multilingual emergency triage, and crons. |
-| **`src/test-assistant.ts`** | **99** | **Passed** | Doctor tools, confirmed booking/cancel/reschedule, expired/forged confirmations, slot taken guards, and VAD audio handling. |
-| **`src/test-timezone.ts`** | **4** | **Passed** | Hospital timezone rules evaluated across UTC, Asia/Kolkata, America/Los_Angeles, Pacific/Auckland. |
-| **`src/test-scheduling.ts`** | **114** | **Passed** | Wave & stream recurrence, specific-date shifts, and timezone cross-checks. |
-| **`src/test-elastic.ts`** | **23** | **Passed** | Live OPD session expansion, shrinkage, slot calculation, and clinical conflict resolution. |
-| **`src/test-phase1-hardening.ts`** | **48** | **Passed** | Distributed rate limiting, environment validation, background sweep safety, and advisory locks. |
-| **`src/test-phase3-lifecycle.ts`** | **12** | **Passed** | Appointment state machine transitions, concurrency guards, and deterministic refund idempotency. |
-| **Total Test Suite** | **489 Passed** | **0 Failed** | **100% Deterministic Verification** |
+- **Domain Repository Decomposition:** 3,600+ lines of monolithic database operations decomposed into 5 domain repositories (`UserRepository`, `DoctorRepository`, `AppointmentRepository`, `BillingRepository`, `NotificationRepository`) sharing a unified `RepositoryContext`.
+- **Lightweight Backward-Compatible Facade:** `MedrellaRepository` in `src/db/repo.ts` delegates domain logic while preserving full backward compatibility.
+- **Fail-Safe In-Memory Fallback:** Seamless local offline testing and demo modes while enforcing strict PostgreSQL validation in production environments.
+
+---
+
+## 🛡️ Key Production Hardening Innovations
+
+### 1. Concurrency & Double-Booking Advisory Locks
+- **Transaction-Scoped Advisory Locking:** Uses `pg_advisory_xact_lock` on doctor-day hashes (`lockDoctorDay`) to guarantee serializable slot reservations even under simultaneous burst requests.
+- **Atomic Re-Checking:** Re-validates slot availability within the transaction boundary immediately before committing booking rows.
+
+### 2. Distributed Rate Limiting
+- **Atomic CTE Rate Limiter:** `src/lib/rate-limiter.ts` executes atomic Postgres CTE updates (`INSERT ... ON CONFLICT DO UPDATE`) guarded by transaction locks.
+- **Resilient Fallback:** Automatically degrades to in-memory sliding window counters if the database experiences transient latency.
+
+### 3. Payment & Refund Idempotency
+- **Unique Constraint Recovery:** Webhook handlers and refund calls safely intercept PostgreSQL `23505` error collisions on idempotency keys, returning existing records without double-refunding or throwing 500 errors.
+- **Multi-Phase Verification:** Webhook signatures from Razorpay are verified cryptographically before mutating appointment payment states.
+
+### 4. Enterprise Session & Cookie Security
+- **Strict HTTPS `Secure` Cookies:** Removed platform-specific checks in `src/actions/auth.ts`, guaranteeing `Secure; HttpOnly; SameSite=Lax` cookies across all production hosts (AWS, Vercel, Docker, Render).
+- **Hardened Key Derivation:** PBKDF2 password hashing with 600,000 iterations and cryptographic salts.
+
+---
+
+## 🤖 AI Clinical Assistant Pipeline & Safety
+
+The floating assistant serves both patients and doctors with text or hands-free voice interaction:
+
+```
+User (Voice/Text)
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. Session & Origin Gate (Signed HTTP-Only Cookie Authentication) │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 2. Multilingual Emergency Triage Filter (English, Hindi,       │
+│    Marathi, Hinglish) ──► Immediate 112 Route (No LLM Contact)  │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 3. Role-Scoped Tool Execution (Zod-Validated Arguments)          │
+│    Patient: search_doctors, get_open_slots, propose_booking     │
+│    Doctor:  get_my_schedule, get_appointment_stats, conflicts   │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 4. Two-Step Propose & Confirm (HMAC-Signed 5-Min Token Card)     │
+│    No DB mutation occurs until user explicitly presses Confirm   │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 5. Atomic Revalidation & Real-Time Booking / Payment Card       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- **Voice Activity Detection (VAD):** Speech synthesis in `src/components/assistant/use-voice.ts` maintains an active utterance reference set to prevent premature Garbage Collection clipping.
+- **Sanitized Audit Trail:** All assistant interactions and tool executions are recorded in `agent_events` with sanitized identifiers; PHI (names, emails, phone numbers) is strictly redacted.
+
+---
+
+## 📅 Elastic Session Scheduling
+
+Located at `src/lib/elastic-schedule.ts`, this engine allows clinic administrators and doctors to adapt OPD shifts on the fly:
+
+- **Dynamic Shift Resizing:** Doctors can expand or shrink OPD hours even with booked patients present.
+- **Clinical Conflict Resolution:**
+  - **Move to Nearest Slot (Default):** Patients are automatically reassigned to the closest available slot in the modified hours.
+  - **Cancel & Refund:** Cancels displaced bookings and queues an automated 100% gateway refund.
+  - **Keep as Booked:** Preserves original appointment times outside new shift boundaries as clinical exceptions.
+
+---
+
+## 📁 Directory & Project Structure
+
+```
+Medrella_Healthcare/
+├── .github/workflows/          # Automated CI/CD pipeline (PostgreSQL 16 + E2E)
+├── public/images/              # Clinical assets, doctor photos & diagrams
+├── scripts/
+│   ├── migrate.ts              # Advisory-locked Neon PostgreSQL migration runner
+│   └── test-pg-integration.ts  # Real PostgreSQL integration test harness
+├── src/
+│   ├── actions/                # Next.js Server Actions (Auth, Appointments)
+│   ├── app/                    # Next.js 16 App Router pages & API routes
+│   │   ├── api/health/         # Production health check probe (/api/health)
+│   │   ├── api/agent/          # Assistant chat, voice transcribe & confirm
+│   │   ├── doctor/             # Doctor portal & OPD schedule management
+│   │   └── patient/            # Patient dashboard & booking workflows
+│   ├── components/             # Reusable UI, slot picker, voice controls
+│   ├── db/
+│   │   ├── index.ts            # Drizzle client & connection lifecycle
+│   │   ├── repo.ts             # Delegating repository facade
+│   │   ├── schema.ts           # Drizzle schema definitions
+│   │   └── repositories/       # Modular Domain Repositories (5 modules)
+│   ├── domain/                 # Core appointment lifecycle state machines
+│   ├── hooks/                  # Clean separation React hooks (useSlotPicker)
+│   └── lib/                    # Core business logic (Payments, Agent, Rate Limiting)
+├── tests/
+│   └── e2e/clinic.spec.ts      # 10 clinical user journeys in Playwright
+├── DATABASE_MIGRATION_GUIDE.md # Production migration operational guide
+├── ENVIRONMENT_VARIABLES.md    # Exhaustive environment variable specification
+├── PRODUCTION_DEPLOYMENT_GUIDE.md # Zero-downtime deployment & rollback runbook
+├── PRODUCTION_READINESS_REPORT.md # Production architecture verification report
+├── RELEASE_NOTES.md            # Version release notes (v2.0.0)
+├── TESTING_GUIDE.md            # Comprehensive testing manual
+├── next.config.ts              # Production Next.js Turbopack config
+├── package.json                # Scripts & dependencies
+└── playwright.config.ts        # Playwright browser testing configuration
+```
+
+---
+
+## 🚀 Getting Started & Local Setup
+
+### Prerequisites
+- **Node.js**: `v20.x` or higher
+- **npm**: `v10.x` or higher
+- **PostgreSQL**: (Optional for local memory mode; required for production integration)
+
+### Installation
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/atharva1407-sys/Medrella_Healthcare.git
+   cd Medrella_Healthcare
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+3. **Configure environment variables:**
+   ```bash
+   cp .env.example .env.local
+   ```
+   *(See [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) for full descriptions)*
+
+4. **Run database migrations (when connecting to PostgreSQL):**
+   ```bash
+   npm run db:migrate
+   ```
+
+5. **Start local development server:**
+   ```bash
+   npm run dev
+   ```
+   Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+---
+
+## ⚡ Verification & Automated Test Suite
+
+Medrella Healthcare includes 11 deterministic domain test suites (750+ checks) and full-browser Playwright E2E tests:
+
+```bash
+# 1. Run complete domain unit & integration test suite (zero network required)
+npm test
+
+# 2. Run real PostgreSQL concurrency & advisory lock tests
+npm run test:pg
+
+# 3. Run Playwright End-to-End clinical user journeys
+npm run test:e2e
+
+# 4. Verify TypeScript and ESLint compliance
+npx tsc --noEmit
+npm run lint
+
+# 5. Compile production build with Turbopack
+npm run build
+```
+
+### Test Coverage Summary
+
+| Test Suite File | Test Scope | Result |
+| :--- | :--- | :---: |
+| **`src/test-suite.ts`** | Clinical rules, wave/stream capacity, token sequences, double-booking guard | **115 Passed** |
+| **`src/test-payment-hardening.ts`** | Razorpay webhooks, signature verification, seat holds, refund engine | **72 Passed** |
+| **`src/test-notifications.ts`** | Outbox deduplication, IST midnight calculations, PHI redaction, DLQ | **81 Passed** |
+| **`src/test-brevo-welcome.ts`** | Welcome notification pipeline, template escaping, non-blocking delivery | **31 Passed** |
+| **`src/test-agent.ts`** | Sarvam AI tool calling, safety checks, multilingual emergency triage | **72 Passed** |
+| **`src/test-assistant.ts`** | Doctor tools, 2-step confirmations, slot taken guards, VAD audio handling | **99 Passed** |
+| **`src/test-timezone.ts`** | Timezone invariance across UTC, Asia/Kolkata, America/Los_Angeles | **4 Passed** |
+| **`src/test-scheduling.ts`** | Wave & stream recurrence, specific-date shifts, timezone cross-checks | **114 Passed** |
+| **`src/test-elastic.ts`** | Live OPD session expansion, shrinkage, slot calculation, conflict strategies | **105 Passed** |
+| **`src/test-phase1-hardening.ts`** | Distributed rate limiting, env validation, sweep safety, advisory locks | **48 Passed** |
+| **`src/test-phase3-lifecycle.ts`** | Appointment state transitions, concurrency guards, refund idempotency | **12 Passed** |
+| **`tests/e2e/clinic.spec.ts`** | 10 Playwright E2E clinical journeys (login, booking, assistant, dashboard) | **10 Passed** |
+| **Total Automated Checks** | **Comprehensive Deterministic Verification** | **763 Passed (100%)** |
+
+---
+
+## 🔄 CI/CD Pipeline
+
+The repository includes a production-ready GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) triggered on pushes and pull requests:
+
+1. **Static Analysis:** ESLint and strict TypeScript typechecking (`npx tsc --noEmit`).
+2. **Domain Unit Testing:** Executes the full 11-suite test runner.
+3. **Containerized PostgreSQL Testing:** Boots a `postgres:16-alpine` service container, executes `npm run db:migrate`, and runs `npm run test:pg`.
+4. **Turbopack Build:** Compiles all 31 application routes.
+5. **E2E Browser Validation:** Installs Chromium and executes Playwright tests against the built application.
+
+---
+
+## 📚 Operational Documentation Hub
+
+Detailed runbooks and architectural documentation are available in the repository root:
+
+- [🚀 Production Deployment Guide](PRODUCTION_DEPLOYMENT_GUIDE.md) — Pre-flight checklists, zero-downtime deployment, health probes, and rollback procedures.
+- [🔐 Environment Variables Specification](ENVIRONMENT_VARIABLES.md) — Reference for all required and optional environment keys with validation rules.
+- [🗄️ Database Migration Guide](DATABASE_MIGRATION_GUIDE.md) — Migration safety, advisory locking, rollback instructions, and schema evolution.
+- [🧪 Testing Guide](TESTING_GUIDE.md) — Comprehensive guide for unit, integration, PostgreSQL, and Playwright E2E testing.
+- [📋 Release Notes (v2.0.0)](RELEASE_NOTES.md) — Detailed changelog of production readiness improvements.
+- [🛡️ Production Readiness Report](PRODUCTION_READINESS_REPORT.md) — Audit and remediation certification report.
+
+---
+
+## 🏥 Clinical Facility & Compliance
+
+- **Institution:** Medrella Healthcare
+- **Location:** Ruby Hall Clinic Campus, Pune, Maharashtra 411001, India
+- **Timezone:** Indian Standard Time (`Asia/Kolkata`, UTC+05:30)
+- **Data Protection:** PHI sanitization, role-scoped access control, encrypted session cookies, audit logs for clinical transactions.
+
+---
+
+<div align="center">
+  <sub>Maintained by the Medrella Healthcare Engineering & Clinical Architecture Team.</sub>
+</div>
