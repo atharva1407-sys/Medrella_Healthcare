@@ -31,17 +31,16 @@ export default async function PatientDashboard() {
     redirect("/login?message=Please sign in to access your appointments.");
   }
 
-  let patientId = user.profileId;
-  if (user.role === "DOCTOR") {
-    const p = await dbRepo.getPatientByUserId(user.userId);
-    if (p) {
-      patientId = p.id;
-    }
-  }
+  // Only a doctor needs a lookup to find their patient record; a patient's id is already in the session.
+  const patientId =
+    user.role === "DOCTOR" ? ((await dbRepo.getPatientByUserId(user.userId))?.id ?? user.profileId) : user.profileId;
 
-  const patient = patientId ? await dbRepo.getPatientById(patientId) : undefined;
-  const appointments = patientId ? await dbRepo.getAppointmentsByPatientId(patientId) : [];
-  const payments = patientId ? await dbRepo.getPaymentsByPatientId(patientId) : [];
+  // These three do not depend on each other, so fetch them together instead of one after another.
+  const [patient, appointments, payments] = await Promise.all([
+    patientId ? dbRepo.getPatientById(patientId) : Promise.resolve(undefined),
+    patientId ? dbRepo.getAppointmentsByPatientId(patientId) : Promise.resolve([]),
+    patientId ? dbRepo.getPaymentsByPatientId(patientId) : Promise.resolve([]),
+  ]);
   const paymentByApptId = new Map(payments.map((p) => [p.appointmentId, p]));
 
   const upcoming = appointments.filter((a) => a.status === "BOOKED");

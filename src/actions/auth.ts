@@ -14,6 +14,7 @@ import {
   type SessionPayload,
 } from "@/lib/auth-crypto";
 import { registerPatientSchema, registerDoctorSchema } from "@/lib/validators";
+import { getCurrentUserOncePerRequest } from "@/lib/current-user";
 
 const COOKIE_NAME = "medrella_session";
 
@@ -34,20 +35,8 @@ function getCookieConfig() {
 }
 
 export async function getCurrentUser(): Promise<SessionPayload | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(COOKIE_NAME)?.value;
-  if (!token) return null;
-  const payload = verifySessionToken(token);
-  if (!payload) return null;
-
-  // Real-time Database Session Validation:
-  // Ensure the user still exists in the database and their account is active.
-  const dbUser = await dbRepo.getUserById(payload.userId);
-  if (!dbUser || !dbUser.isActive) {
-    return null;
-  }
-
-  return payload;
+  // Real-time database session validation lives in src/lib/current-user.ts, where it is shared per request.
+  return getCurrentUserOncePerRequest();
 }
 
 function sanitizeRedirect(rawRedirect?: string | null): string | null {
