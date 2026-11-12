@@ -70,6 +70,9 @@ jobs:
         env:
           NODE_ENV: production
           NEXT_TELEMETRY_DISABLED: "1"
+          DATABASE_URL: postgres://medrella_user:medrella_secure_password@localhost:5432/medrella_test_db
+          SESSION_SECRET: test_session_secret_at_least_32_characters_long_for_security
+          CRON_SECRET: test_cron_secret_for_scheduled_tasks
         run: npm run build
 
       - name: Install Playwright Browsers
@@ -80,6 +83,9 @@ jobs:
           CI: "1"
           NODE_ENV: production
           NEXT_TELEMETRY_DISABLED: "1"
+          DATABASE_URL: postgres://medrella_user:medrella_secure_password@localhost:5432/medrella_test_db
+          SESSION_SECRET: test_session_secret_at_least_32_characters_long_for_security
+          CRON_SECRET: test_cron_secret_for_scheduled_tasks
         run: npm run test:e2e
 
   security-audit:
