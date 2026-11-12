@@ -14,7 +14,7 @@ import { Pool as NeonPool } from "@neondatabase/serverless";
 import { drizzle as neonDrizzle } from "drizzle-orm/neon-serverless";
 import { Pool as PgPool } from "pg";
 import { drizzle as pgDrizzle } from "drizzle-orm/node-postgres";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, and, gte } from "drizzle-orm";
 import * as schema from "../src/db/schema";
 import crypto from "crypto";
 
@@ -92,7 +92,7 @@ async function main() {
       "payment_events",
       "refunds",
       "notifications",
-      "rate_limits",
+      "login_attempts",
     ];
 
     for (const table of requiredTables) {
@@ -135,92 +135,86 @@ async function main() {
 
     // 5. Unique Constraint (23505) Graceful Recovery
     console.log("\n--- 5. Unique Constraint Idempotency Handling (Error 23505) ---");
-    const testIdempotencyKey = `ref_key_${crypto.randomUUID()}`;
-    const testPaymentId = `pay_${crypto.randomUUID()}`;
-    const testApptId = `apt_${crypto.randomUUID()}`;
+    const testDuplicateEmail = `uniq_test_${crypto.randomUUID()}@medrella.internal`;
 
     // First insert succeeds
-    const [firstRefund] = await db.insert(schema.refunds).values({
-      id: `ref_${crypto.randomUUID()}`,
-      paymentId: testPaymentId,
-      appointmentId: testApptId,
-      amountPaise: 50000,
-      reason: "Initial test refund",
-      status: "REQUESTED",
-      providerRefundId: null,
-      idempotencyKey: testIdempotencyKey,
-      failureReason: null,
+    const [firstUser] = await db.insert(schema.users).values({
+      id: `usr_${crypto.randomUUID()}`,
+      email: testDuplicateEmail,
+      passwordHash: "test_hash",
+      role: "PATIENT",
+      isActive: true,
+      createdAt: new Date(),
     }).returning();
 
-    assert(Boolean(firstRefund?.id), "First refund record inserted successfully");
+    assert(Boolean(firstUser?.id), "First user record inserted successfully");
 
-    // Second insert with same idempotency key tests 23505 error code
+    // Second insert with same email tests 23505 error code
     let caught23505 = false;
-    let fallbackRefund: any = null;
+    let fallbackUser: any = null;
 
     try {
-      await db.insert(schema.refunds).values({
-        id: `ref_${crypto.randomUUID()}`,
-        paymentId: testPaymentId,
-        appointmentId: testApptId,
-        amountPaise: 50000,
-        reason: "Duplicate concurrent request",
-        status: "REQUESTED",
-        providerRefundId: null,
-        idempotencyKey: testIdempotencyKey,
-        failureReason: null,
+      await db.insert(schema.users).values({
+        id: `usr_${crypto.randomUUID()}`,
+        email: testDuplicateEmail,
+        passwordHash: "duplicate_hash",
+        role: "PATIENT",
+        isActive: true,
+        createdAt: new Date(),
       });
     } catch (err: any) {
-      if (err?.code === "23505" || err?.message?.includes("refunds_idempotency_key_unique")) {
+      if (err?.code === "23505" || err?.message?.includes("users_email_unique") || err?.message?.includes("duplicate key")) {
         caught23505 = true;
-        // Application fallback
-        const [existing] = await db.select().from(schema.refunds).where(eq(schema.refunds.idempotencyKey, testIdempotencyKey));
-        fallbackRefund = existing;
+        // Application fallback: query existing user
+        const [existing] = await db.select().from(schema.users).where(eq(schema.users.email, testDuplicateEmail));
+        fallbackUser = existing;
       }
     }
 
-    assert(caught23505, "PostgreSQL accurately triggers error code 23505 on duplicate idempotency key");
-    assert(fallbackRefund?.id === firstRefund?.id, "Application gracefully recovers and returns existing refund record");
+    assert(caught23505, "PostgreSQL accurately triggers error code 23505 on duplicate unique constraint");
+    assert(fallbackUser?.id === firstUser?.id, "Application gracefully recovers and returns existing record");
 
-    // Clean up test refund
-    await db.delete(schema.refunds).where(eq(schema.refunds.idempotencyKey, testIdempotencyKey));
+    // Clean up test user
+    await db.delete(schema.users).where(eq(schema.users.email, testDuplicateEmail));
 
-    // 6. Atomic CTE Distributed Rate Limiting
-    console.log("\n--- 6. Atomic Distributed CTE Rate Limiting ---");
+    // 6. Atomic Distributed Rate Limiting via login_attempts & Transaction-Scoped Advisory Locks
+    console.log("\n--- 6. Atomic Distributed Rate Limiting ---");
     const rateLimitKey = `test_ip_${crypto.randomUUID()}`;
     const windowMinutes = 1;
     const maxLimit = 3;
 
     const testRateLimitSql = async () => {
-      const windowStart = new Date(Date.now() - windowMinutes * 60 * 1000);
-      const res = await db.execute(sql`
-        WITH current_window AS (
-          SELECT count(*)::int AS count
-          FROM rate_limits
-          WHERE key = ${rateLimitKey} AND created_at >= ${windowStart}
-        )
-        INSERT INTO rate_limits (id, key, created_at)
-        SELECT 
-          'rl-' || substr(md5(random()::text || clock_timestamp()::text), 1, 24),
-          ${rateLimitKey},
-          now()
-        FROM current_window
-        WHERE current_window.count < ${maxLimit}
-        RETURNING (SELECT count FROM current_window) as prev_count;
-      `);
-      return res.rows.length > 0;
+      const cutoff = new Date(Date.now() - windowMinutes * 60 * 1000);
+      return await db.transaction(async (tx: any) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`ratelimit:${rateLimitKey}`}))`);
+        const [stats] = await tx
+          .select({ cnt: sql<number>`count(*)::int` })
+          .from(schema.loginAttempts)
+          .where(and(eq(schema.loginAttempts.email, rateLimitKey), gte(schema.loginAttempts.attemptedAt, cutoff)));
+        
+        const count = Number(stats?.cnt ?? 0);
+        if (count < maxLimit) {
+          await tx.insert(schema.loginAttempts).values({
+            id: `att-${crypto.randomUUID()}`,
+            email: rateLimitKey,
+            attemptedAt: new Date(),
+          });
+          return true;
+        }
+        return false;
+      });
     };
 
     const call1 = await testRateLimitSql();
     const call2 = await testRateLimitSql();
     const call3 = await testRateLimitSql();
-    const call4 = await testRateLimitSql(); // Should be rejected by CTE
+    const call4 = await testRateLimitSql(); // Should be rejected by quota limit
 
     assert(call1 && call2 && call3, "First 3 rate limit tokens allowed within quota");
-    assert(!call4, "4th token atomically blocked by PostgreSQL CTE data-modifying conditional insert");
+    assert(!call4, "4th token atomically blocked by PostgreSQL conditional limit check");
 
-    // Clean up rate limits
-    await db.execute(sql`DELETE FROM rate_limits WHERE key = ${rateLimitKey}`);
+    // Clean up test login attempts
+    await db.delete(schema.loginAttempts).where(eq(schema.loginAttempts.email, rateLimitKey));
 
     console.log("\n==========================================");
     console.log(`PostgreSQL Integration Results: ${passed} passed, ${failed} failed`);
