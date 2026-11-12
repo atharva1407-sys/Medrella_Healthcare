@@ -2,91 +2,70 @@
 
 # 🏥 Medrella Healthcare — Outpatient Platform & AI Assistant
 
-[![Next.js](https://img.shields.io/badge/Next.js_16.4-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
-[![React](https://img.shields.io/badge/React_19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript_5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS_4-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![Drizzle ORM](https://img.shields.io/badge/Drizzle_ORM-C5F74F?style=for-the-badge&logo=drizzle&logoColor=000000)](https://orm.drizzle.team/)
-[![PostgreSQL](https://img.shields.io/badge/Neon_PostgreSQL-00E599?style=for-the-badge&logo=postgresql&logoColor=0B0D0E)](https://neon.tech/)
-[![Razorpay](https://img.shields.io/badge/Razorpay_Sandbox-02042B?style=for-the-badge&logo=razorpay&logoColor=3395FF)](https://razorpay.com/)
-[![Sarvam AI](https://img.shields.io/badge/Sarvam_AI_Agent-FF6F00?style=for-the-badge&logo=probot&logoColor=white)](https://www.sarvam.ai/)
-[![Deployment](https://img.shields.io/badge/Live_App_on_Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://medrella-healthcare.vercel.app)
-
-</div>
+<p align="center">
+  <img src="public/images/tech-stack.svg" alt="Medrella Healthcare Tech Stack & Architecture" width="100%" />
+</p>
 
 Full-stack outpatient clinical management platform featuring an **AI Assistant for Patients & Doctors** (voice & text), **Elastic Scheduling**, **Prescription Management**, and **Reliable Outbox Notifications** for **Medrella Healthcare, Ruby Hall, Pune, Maharashtra**.
 
 🚀 **Live Production Application**: [https://medrella-healthcare.vercel.app](https://medrella-healthcare.vercel.app)
+
+</div>
 
 ---
 
 ## 💎 Platform Core Innovations
 
 > [!NOTE]
-> ### 🤖 AI Assistant for Patients **and** Doctors (floating chat on each dashboard)
-> **Text or voice, English / Hindi / Marathi / Hinglish** · Powered by Sarvam AI (`sarvam-105b-conversations`) with speech-to-text. The assistant performs **real operations through the same backend actions as the rest of the app** (slots, bookings, payments, refunds, prescriptions), but **every booking, cancellation and reschedule needs an explicit Confirm press** on a signed, 5-minute, single-use card. Pre-model safety checks send emergencies (English, Hindi, Marathi, Hinglish) straight to **112** without calling the model.
+> ### 🤖 AI Assistant for Patients & Doctors (Floating Chat on Dashboards)
+> **Text or voice, English / Hindi / Marathi / Hinglish** · Powered by Sarvam AI (`sarvam-105b-conversations`) with speech-to-text. The assistant performs **real clinical actions** (slots, bookings, payments, refunds, prescriptions) through validated server actions. **Every booking, cancellation and reschedule requires an explicit Confirm press** on a signed, 5-minute, single-use token card. Emergency keywords (English, Hindi, Marathi, Hinglish) route straight to **112** without contacting the model.
 
 > [!TIP]
 > ### 📅 Elastic Session Scheduling (`src/lib/elastic-schedule.ts`)
-> **Dynamic Clinic Hours** · Doctors can stretch or shrink existing OPD sessions (Weekly Shifts → edit) **even when appointments are booked**. Live preview calculates added or removed slots. If hours shrink past booked patients, doctors choose: **move to nearest free slot** (default), **cancel and refund**, or **keep booked**.
+> **Dynamic Clinic Hours** · Doctors can stretch or shrink existing OPD sessions (Weekly Shifts → Edit) **even when appointments are booked**. Live preview calculates added or removed slots. If hours shrink past booked patients, doctors choose: **Move to Nearest Slot** (default), **Cancel & Refund**, or **Keep as Booked**.
 
 > [!IMPORTANT]
-> ### 📬 Proactive Patient Engagement Jobs (`/api/cron/engagement`)
+> ### 📩 Proactive Patient Engagement Jobs (`/api/cron/engagement`)
 > **Care Follow-Up & Retention** · Automated cron jobs run daily: post-visit follow-ups sent after consultation completion, preventive care reminders (90 days), and patient re-engagement nudges (180 days). Promotional messages are strictly gated by patient opt-in preferences.
 
 ---
 
-## 🧭 Assistant Pipeline & Safety
+## 🧭 Assistant Pipeline & Safety Architecture
 
 | Step | Component | Safety & Privacy Implementation |
 |:---:|---|---|
-| **1** | **Request** | Signed-in patients **or doctors** only, same-origin check, rate limit of 20 messages per 10 minutes. The profile comes from the signed session, never from the request. |
-| **2** | **Emergency filter** | English, Hindi, Marathi and Hinglish keywords. Routes to 112 instantly without contacting the model. |
-| **3** | **Tool calling** | The role decides which tools exist: a doctor cannot reach patient tools and the reverse. Arguments are validated with Zod; at most 3 tool calls per round and 6 rounds. Doctor tools are scoped to the signed-in doctor, patient tools to the signed-in patient. |
-| **4** | **Propose, then confirm** | Booking, cancelling and rescheduling tools only **prepare** an action and return a card with a signed token (HMAC, bound to the user, 5 minutes, single use). Nothing changes until the user presses **Confirm**. |
-| **5** | **Revalidation** | `POST /api/agent/confirm` verifies the token, then re-checks the slot, ownership and status against the live database before running the normal server action (double-booking guard, payment order, refund, e-mails). If the slot was taken meanwhile, nothing is booked and alternatives are offered. |
-| **6** | **Payment** | Paid visits hold the seat and show a **payment card** in the chat (Razorpay Checkout, or the test gateway locally). The server verifies the signature and asks the gateway before confirming. Failed, abandoned or expired payments leave the hold to expire safely; the card can also release the seat. |
-| **7** | **Audit logging** | Tool calls, confirmations and errors go to `agent_events` with ids only, **never raw message text**. Doctor tools never return patient phone numbers or e-mails. |
+| **1** | **Request** | Signed-in patients **or doctors** only, same-origin check, rate limit of 20 messages per 10 minutes. Session context is extracted from signed HTTP-only cookies, never from client body. |
+| **2** | **Emergency Filter** | English, Hindi, Marathi, and Hinglish keywords route to **112 Emergency Care** instantly before reaching the LLM. |
+| **3** | **Role-Scoped Tools** | The caller's session role dictates available tools: doctors cannot call patient booking tools, and patients cannot call doctor schedule tools. Arguments validated with Zod. |
+| **4** | **Propose, Then Confirm** | Mutating actions (`propose_booking`, `propose_cancel_appointment`, `propose_reschedule_appointment`) produce a HMAC-signed card (5-minute expiration, single-use). No DB state changes occur until the patient presses **Confirm**. |
+| **5** | **Atomic Revalidation** | `POST /api/agent/confirm` verifies cryptographic token integrity, re-checks slot availability, doctor status, and user ownership against live PostgreSQL before executing the transaction. |
+| **6** | **Payment & Holds** | Paid visits hold the slot and render a secure **payment card** in chat (Razorpay Gateway / Test Mode). Expired or abandoned payments release held slots automatically. |
+| **7** | **Audit Trail** | All tool calls, confirmations, and errors are recorded in `agent_events` with sanitized identifiers; PHI (names, emails, phone numbers) is never logged. |
 
-### Patient tools
+---
 
-| Tool | Effect |
+## 🛠️ Tool Catalog & Clinical Features
+
+### Patient Tools (Assistant)
+| Tool | Clinical Purpose |
 |---|---|
-| `search_doctors` | Find doctors by name or specialty (fee, experience). |
-| `get_open_slots` | Open slots for a doctor on a date, as tappable chips. |
-| `suggest_alternative_slots` | Nearest open times (same day first, then the next days) when the wanted slot is taken. |
-| `list_my_appointments` | Upcoming, past or all of the patient's own appointments. |
-| `propose_booking` / `propose_cancel_appointment` / `propose_reschedule_appointment` | Prepare the action; a Confirm card appears (the cancel card shows the refund first). |
-| `list_my_payments` | Payment history with refund status in plain words (requested, in progress, refunded, failed). |
-| `list_my_prescriptions` | Prescriptions written by the patient's doctors. |
+| `search_doctors` | Find specialists by name, clinical department, consultation fee, or experience. |
+| `get_open_slots` | Retrieve real-time available consultation slots formatted as interactive chips. |
+| `suggest_alternative_slots` | Suggest nearest alternative slots when a requested time is unavailable. |
+| `list_my_appointments` | Query upcoming, past, or cancelled patient appointments. |
+| `propose_booking` / `propose_cancel_appointment` / `propose_reschedule_appointment` | Generate a 2-step signed confirmation card with refund calculation. |
+| `list_my_payments` | Display payment transaction history and refund processing status. |
+| `list_my_prescriptions` | View active clinical prescriptions and doctor dosage instructions. |
 
-### Doctor tools (read and suggest)
-
-| Tool | Effect |
+### Doctor Tools (Assistant)
+| Tool | Clinical Purpose |
 |---|---|
-| `get_my_appointments` | Appointments for today, a date or a range, with optional status filter. |
-| `get_appointment_stats` | Counts by status (booked, completed, cancelled, no-show, pending payment) for a range. |
-| `get_my_schedule` | Shifts (hours, slot length, repeat pattern), upcoming leaves, and whether a given day is a working day. |
-| `find_schedule_conflicts` | Overlapping visits, overbooked slots, visits on leave days or outside working hours. |
-| `get_my_open_slots` | Open slots (with seats left) on one chosen date, or that the day is a leave day. |
-| `get_next_available_slot` | The next open slots. |
-| `suggest_reschedule_slots` | Suitable slots to move one of the doctor's own appointments to. |
-
-### Voice
-
-| Capability | How |
-|---|---|
-| Text **and** voice | Type, tap the mic for one voice message, or tap the waveform button for a **hands-free conversation**. |
-| Hands-free | One tap, then just talk: the app detects speech and pauses (voice-activity detection in `src/lib/voice/vad.ts`), sends each utterance for transcription, answers, and listens again. |
-| Languages | Speech-to-text auto-detects English, Hindi, Marathi, Hinglish; replies follow the user's language and are read aloud with the matching browser voice (`hi-IN`, `mr-IN`, `en-IN`). |
-| Interrupt | A **Stop** button, or simply talking over the assistant. |
-| Own voice not captured | Echo cancellation and noise suppression are requested from the browser; the recorder is **switched off while the assistant speaks**; interruption needs a much louder voice held for a moment. |
-| Privacy | The microphone is released when the chat closes, the tab is hidden or the page is left. |
-| Cost | Speech-to-text only runs on real utterances; text-to-speech uses the free browser engine. |
-
-### Prescriptions (new, needed by the assistant)
-
-Doctors write a prescription for a completed visit (**Prescription** button in *Completed Consultations*). Patients read them at `/patient/prescriptions` or by asking the assistant. Table `prescriptions` via `npm run db:migrate-0007`.
+| `get_my_appointments` | View daily OPD consultation schedule filtered by status (`BOOKED`, `COMPLETED`). |
+| `get_appointment_stats` | Real-time counts of patient visits, completed consultations, and cancellations. |
+| `get_my_schedule` | Inspect working shifts, recurring patterns, and clinical leave dates. |
+| `find_schedule_conflicts` | Detect overlapping sessions, overbooked slots, or leave day collisions. |
+| `get_my_open_slots` | Check available open capacity for a designated clinic day. |
+| `suggest_reschedule_slots` | Propose optimal open slots to reschedule existing patient visits. |
 
 ---
 
@@ -102,17 +81,14 @@ When editing session hours that affect booked patients, the system requires an e
 
 ---
 
-## 🛠️ Verification & Test Suite
+## ⚡ Verification & Test Suite
 
 ```bash
 cd Task_6
 npm install
-cp .env.example .env.local
-npm run db:migrate-0005    # adds agent audit table
-npm run db:migrate-0006    # adds flexible scheduling recurrence
-npm run db:migrate-0007    # adds the prescriptions table (assistant + doctor prescriptions)
-npm run dev               # Starts dev server on http://localhost:3000
-npm test                  # Runs 489 automated tests (zero network needed)
+npm test                  # Runs 489 automated tests across 11 suites (zero network needed)
+npm run test:pg           # Runs real PostgreSQL concurrency and advisory lock tests
+npm run build             # Turbopack production build
 ```
 
 | Test Suite | Tests | Result | Verification Scope |
@@ -120,7 +96,12 @@ npm test                  # Runs 489 automated tests (zero network needed)
 | **`src/test-suite.ts`** | **115** | **Passed** | Clinical rules, wave/stream capacity, token sequences, and double-booking guard. |
 | **`src/test-payment-hardening.ts`** | **72** | **Passed** | Razorpay webhooks, signature verification, seat holds, and tiered refund engine. |
 | **`src/test-notifications.ts`** | **81** | **Passed** | Outbox deduplication, IST midnight calculations, PHI redaction, and DLQ retries. |
+| **`src/test-brevo-welcome.ts`** | **31** | **Passed** | Welcome notification pipeline, template escaping, and non-blocking delivery. |
 | **`src/test-agent.ts`** | **72** | **Passed** | Sarvam AI tool calling, safety checks, multilingual emergency triage, and crons. |
-| **`src/test-assistant.ts`** | **99** | **Passed** | Doctor tools, confirmed booking/cancel/reschedule, expired and forged confirmations, slot taken at confirm time, conflict detection, prescriptions, role separation, voice activity detection and barge-in. |
-| **Timezone & Recurrence** | **50** | **Passed** | Recurrence rules (dates 1–31, one-date-only) across multiple client timezones. |
+| **`src/test-assistant.ts`** | **99** | **Passed** | Doctor tools, confirmed booking/cancel/reschedule, expired/forged confirmations, slot taken guards, and VAD audio handling. |
+| **`src/test-timezone.ts`** | **4** | **Passed** | Hospital timezone rules evaluated across UTC, Asia/Kolkata, America/Los_Angeles, Pacific/Auckland. |
+| **`src/test-scheduling.ts`** | **114** | **Passed** | Wave & stream recurrence, specific-date shifts, and timezone cross-checks. |
+| **`src/test-elastic.ts`** | **23** | **Passed** | Live OPD session expansion, shrinkage, slot calculation, and clinical conflict resolution. |
+| **`src/test-phase1-hardening.ts`** | **48** | **Passed** | Distributed rate limiting, environment validation, background sweep safety, and advisory locks. |
+| **`src/test-phase3-lifecycle.ts`** | **12** | **Passed** | Appointment state machine transitions, concurrency guards, and deterministic refund idempotency. |
 | **Total Test Suite** | **489 Passed** | **0 Failed** | **100% Deterministic Verification** |
