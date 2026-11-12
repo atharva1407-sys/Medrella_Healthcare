@@ -23,6 +23,10 @@ yarn-error.log*
 .env*.local
 .env
 
+# test artifacts
+/test-results/
+/playwright-report/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

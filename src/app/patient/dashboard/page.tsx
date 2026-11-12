@@ -4,8 +4,6 @@ import { getCurrentUser } from "@/actions/auth";
 import { PatientAppointmentActions } from "./patient-appointment-actions";
 import { dbRepo } from "@/db/repo";
 import { formatDate } from "@/lib/utils";
-import { sweepExpiredHolds } from "@/lib/payments/expire";
-import { runInBackground } from "@/lib/background";
 import { formatPaise } from "@/lib/payments";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
 
@@ -32,11 +30,6 @@ export default async function PatientDashboard() {
   if (!user) {
     redirect("/login?message=Please sign in to access your appointments.");
   }
-
-  // Opportunistic sweep of expired payment holds
-  runInBackground(async () => {
-    await sweepExpiredHolds(dbRepo);
-  });
 
   let patientId = user.profileId;
   if (user.role === "DOCTOR") {

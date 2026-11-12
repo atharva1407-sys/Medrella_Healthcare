@@ -19,9 +19,8 @@ const COOKIE_NAME = "medrella_session";
 
 function getCookieConfig() {
   const isProduction = process.env.NODE_ENV === "production";
-  const isVercel = Boolean(process.env.VERCEL || process.env.NEXT_PUBLIC_VERCEL_URL);
-  // Only enforce secure cookies if on Vercel/HTTPS to avoid dropping cookies over HTTP on localhost
-  const isSecure = isProduction && isVercel;
+  // Enforce Secure flag in production on all HTTPS deployment targets (AWS, Docker, Vercel, Railway, Render)
+  const isSecure = isProduction;
   const cookieExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
   return {
