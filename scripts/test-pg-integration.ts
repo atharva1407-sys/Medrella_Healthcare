@@ -10,8 +10,10 @@
  * - Unique constraint (23505) violation graceful catch & recovery
  */
 
-import { Pool } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-serverless";
+import { Pool as NeonPool } from "@neondatabase/serverless";
+import { drizzle as neonDrizzle } from "drizzle-orm/neon-serverless";
+import { Pool as PgPool } from "pg";
+import { drizzle as pgDrizzle } from "drizzle-orm/node-postgres";
 import { sql, eq } from "drizzle-orm";
 import * as schema from "../src/db/schema";
 import crypto from "crypto";
@@ -28,18 +30,27 @@ async function main() {
     process.exit(1);
   }
 
+  const isLocal = databaseUrl.includes("localhost") || databaseUrl.includes("127.0.0.1");
+
   // Sanitize connection string for display
   const maskedUrl = databaseUrl.replace(/:([^:@]+)@/, ":****@");
-  console.log(`📡 Connecting to PostgreSQL at: ${maskedUrl}`);
+  console.log(`📡 Connecting to PostgreSQL at: ${maskedUrl} (${isLocal ? "node-postgres / TCP" : "neon-serverless / WebSocket"})`);
 
-  const pool = new Pool({
-    connectionString: databaseUrl,
-    connectionTimeoutMillis: 5000,
-    max: 5,
-  });
+  const pool: any = isLocal
+    ? new PgPool({
+        connectionString: databaseUrl,
+        connectionTimeoutMillis: 5000,
+        max: 5,
+      })
+    : new NeonPool({
+        connectionString: databaseUrl,
+        connectionTimeoutMillis: 5000,
+        max: 5,
+      });
 
-  const client = await pool.connect();
-  const db = drizzle(client, { schema });
+  const client: any = await pool.connect();
+  const drizzle: any = isLocal ? pgDrizzle : neonDrizzle;
+  const db: any = drizzle(client, { schema });
 
   let passed = 0;
   let failed = 0;
@@ -92,7 +103,7 @@ async function main() {
     console.log("\n--- 3. ACID Transaction Rollback Integrity ---");
     const testEmail = `rollback_test_${crypto.randomUUID()}@medrella.internal`;
     try {
-      await db.transaction(async (tx) => {
+      await db.transaction(async (tx: any) => {
         await tx.insert(schema.users).values({
           id: `usr_${crypto.randomUUID()}`,
           email: testEmail,
@@ -116,7 +127,7 @@ async function main() {
     const lockKey = `test_lock_${crypto.randomUUID()}`;
     let lockAcquired = false;
 
-    await db.transaction(async (tx) => {
+    await db.transaction(async (tx: any) => {
       const lockRes = await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey})) as locked`);
       lockAcquired = true;
     });
