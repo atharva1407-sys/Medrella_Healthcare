@@ -1,163 +1,122 @@
 <div align="center">
 
-# 🏥 Medrella Healthcare — Outpatient Platform & AI Assistant
+# 🏥 Medrella Healthcare
 
-<p align="center">
-  <img src="https://skillicons.dev/icons?i=nextjs,react,ts,tailwind,postgres,nodejs,vercel,docker" alt="Next.js, React, TypeScript, Tailwind CSS, PostgreSQL, Node.js, Vercel" />
-</p>
+### Outpatient booking, payments and a multilingual voice AI assistant for Ruby Hall Clinic, Pune
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Next.js_16.4-black?style=flat-square&logo=nextdotjs&logoColor=white" alt="Next.js 16.4" />
-  <img src="https://img.shields.io/badge/React_19-20232A?style=flat-square&logo=react&logoColor=61DAFB" alt="React 19" />
-  <img src="https://img.shields.io/badge/TypeScript_5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5" />
-  <img src="https://img.shields.io/badge/Tailwind_4.0-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white" alt="Tailwind 4" />
-  <img src="https://img.shields.io/badge/Drizzle_ORM-C5F74F?style=flat-square&logo=drizzle&logoColor=000000" alt="Drizzle ORM" />
-  <img src="https://img.shields.io/badge/Neon_PostgreSQL_16-00E599?style=flat-square&logo=postgresql&logoColor=0B0D0E" alt="PostgreSQL 16" />
-  <img src="https://img.shields.io/badge/Razorpay_Gateway-02042B?style=flat-square&logo=razorpay&logoColor=3395FF" alt="Razorpay" />
-  <img src="https://img.shields.io/badge/Sarvam_AI-FF6F00?style=flat-square&logo=probot&logoColor=white" alt="Sarvam AI" />
-  <img src="https://img.shields.io/badge/CI%2FCD-100%25_Passing-success?style=flat-square&logo=githubactions&logoColor=white" alt="CI/CD Status" />
-</p>
+<a href="https://medrella-healthcare.vercel.app"><img src="https://img.shields.io/badge/LIVE_DEMO-medrella--healthcare.vercel.app-0875DF?style=for-the-badge&logo=vercel&logoColor=white" alt="Live demo" /></a>
+<a href="https://github.com/atharva1407-sys/Pearl_Thoughts_Atharva-Mandlik"><img src="https://img.shields.io/badge/TASK_BY_TASK_HISTORY-Pearl__Thoughts-181717?style=for-the-badge&logo=github&logoColor=white" alt="Task by task repository" /></a>
 
-Full-stack outpatient clinical management platform with **Multilingual AI Clinical Voice Assistant**, **Elastic OPD Scheduling**, **Razorpay Payments with Tiered Refunds**, and **Reliable Transactional Outbox Notifications** for **Medrella Healthcare, Ruby Hall Clinic, Pune**.
+<img src="https://skillicons.dev/icons?i=nextjs,react,ts,tailwind,postgres,nodejs,vercel,githubactions&perline=8" alt="Next.js, React, TypeScript, Tailwind CSS, PostgreSQL, Node.js, Vercel, GitHub Actions" />
 
-🚀 **Live Production Application**: [https://medrella-healthcare.vercel.app](https://medrella-healthcare.vercel.app)
+<img src="https://img.shields.io/badge/Drizzle_ORM-C5F74F?style=for-the-badge&logo=drizzle&logoColor=000000" alt="Drizzle ORM" />
+<img src="https://img.shields.io/badge/Neon-00E599?style=for-the-badge&logo=neon&logoColor=000000" alt="Neon" />
+<img src="https://img.shields.io/badge/Razorpay-0C2451?style=for-the-badge&logo=razorpay&logoColor=3395FF" alt="Razorpay" />
+<img src="https://img.shields.io/badge/Zod-3E67B1?style=for-the-badge&logo=zod&logoColor=white" alt="Zod" />
+<img src="https://img.shields.io/badge/Sarvam_AI-FF6F00?style=for-the-badge" alt="Sarvam AI" />
 
 </div>
 
 ---
 
-## ⚡ Executive Summary for Reviewers
+## What this is
 
-Medrella Healthcare is architected for clinical reliability, zero double-booking under concurrency, and secure patient access:
+The production build of Medrella: patients find a doctor, book a slot, pay online and get email reminders; doctors manage their own schedule and queue. A **voice AI assistant** (English, Hindi, Marathi, Hinglish) lets both sides do all of that by chatting, and it always asks for an explicit **Confirm** before booking, cancelling or rescheduling.
 
-- **🤖 Patient-in-the-Loop AI Assistant**: Text & hands-free voice in English, Hindi, Marathi, and Hinglish powered by Sarvam AI (`sarvam-105b-conversations`). Mutating actions (bookings, cancellations, reschedules) require an explicit user press on a 5-minute HMAC-signed token card. Emergency keywords bypass LLM and route to **112**.
-- **📅 Elastic Session Scheduling**: Doctors dynamically stretch or shrink OPD sessions without dropping booked patients (`src/lib/elastic-schedule.ts`). Supports Stream & Wave formats (1–20 patients/slot), recurring weekly, monthly dates (1–31), and one-date clinics.
-- **🔒 Zero Double-Booking Concurrency**: PostgreSQL transaction-scoped advisory locks (`pg_advisory_xact_lock`) on doctor-day hashes guarantee serializable slot reservations during concurrent burst traffic.
-- **💳 Razorpay Payments & Tiered Refunds**: 10-minute temporary seat hold with live countdown, server-side HMAC-SHA256 signature verification, idempotent webhook processing, and automated tiered refunds (≥24h: 100%, 2h–24h: 50%, <2h: 0%, Doctor Cancel: 100%).
-- **📬 Reliable Transactional Email Outbox**: Fail-safe database queuing with Brevo & Resend dispatch, strict Asia/Kolkata (`Asia/Kolkata`, IST = UTC+05:30) precision, pre-send status recheck, clinical PHI redaction, and an Admin Dead-Letter Queue (DLQ) monitor.
-- **✅ Rigorous Test Coverage**: **580+ automated checks across 11 test suites**, including real PostgreSQL concurrency tests and Playwright E2E browser tests (100% green in GitHub Actions CI).
-
----
-
-## 🔑 Reviewer Demo Accounts & Test Credentials
-
-All roles are pre-seeded in the database for instant testing:
-
-| Role / Specialist | Login Email | Password | Clinical Purpose & Demo Focus |
-|---|---|---|---|
-| **Cardiology** | `dr.rohan.mehta@medrella.com` | `Doctor@123` | Morning & Evening OPD shifts · ₹800 consultation fee |
-| **Neurology** | `dr.priya.nair@medrella.com` | `Doctor@123` | Wave & Stream sessions · ₹900 fee · Elastic rescheduling |
-| **Orthopedics** | `dr.arjun.rao@medrella.com` | `Doctor@123` | Sports trauma OPD · ₹750 fee · Leave dates management |
-| **General Medicine** | `dr.sandeep.kulkarni@medrella.com` | `Doctor@123` | Walk-in triage · ₹500 fee · SOAP notes & prescriptions |
-| **Patient Account** | *Self-register at `/register`* | *Any 8+ char* | Instant access to AI Assistant, Slot Picker & Payments |
-| **Admin Monitor** | `admin@rubyhall.com` | *Authorized* | Live Email Outbox & Dead-Letter Queue at `/admin/notifications` |
-
-### Razorpay Sandbox Test Payment Details
-- **Test Card (Visa)**: `4718 6091 0820 4366` · Exp: `12/28` · CVV: `123`
-- **Test UPI**: `success@razorpay` *(instant success simulation)*
-
----
-
-## 🧭 Core Application Routes
-
-| Path | Purpose & Reviewer Highlights |
+| | |
 |---|---|
-| [`/`](https://medrella-healthcare.vercel.app/) | Landing page, hospital branding, 8 clinical specialists catalog, next open slot preview |
-| [`/book`](https://medrella-healthcare.vercel.app/book) | Interactive slot picker, 10-minute seat hold timer, wave & stream capacity chips |
-| [`/queue`](https://medrella-healthcare.vercel.app/queue) | Real-time live OPD waiting queue with obstetric pre-eclampsia priority override |
-| [`/doctor/dashboard`](https://medrella-healthcare.vercel.app/doctor/dashboard) | Doctor schedule, encounter completion, no-show marking, session shifts manager |
-| [`/patient/dashboard`](https://medrella-healthcare.vercel.app/patient/dashboard) | Patient portal with floating multilingual AI Voice Assistant (`useVoice` STT/TTS) |
-| [`/patient/prescriptions`](https://medrella-healthcare.vercel.app/patient/prescriptions) | Digital prescriptions, dosage instructions, and active medication list |
-| [`/admin/notifications`](https://medrella-healthcare.vercel.app/admin/notifications) | Transactional Outbox monitor, delivery stats, Dead-Letter Queue (DLQ) & 1-click retry |
+| 🤖 **AI assistant** | Text or hands-free voice. Patients book, reschedule, cancel and pay in chat; doctors get schedule, stats, conflicts and free slots. Real backend actions, signed single-use confirmations, emergency messages routed to 112. |
+| 📅 **Elastic scheduling** | Morning and evening sessions, Stream or Wave capacity, leave days. Stretch or shrink hours even with patients booked. |
+| 🔒 **No double booking** | Transaction-scoped PostgreSQL advisory locks, with the slot rechecked right before commit. |
+| 💳 **Payments** | Razorpay checkout, 10-minute seat holds, signature verification, idempotent webhooks, refunds of 100% / 50% / 0% by notice. |
+| 📬 **Email outbox** | Brevo and Resend delivery with retries, IST-accurate reminders, no medical details in emails, admin dead-letter dashboard. |
+| 💊 **Prescriptions** | Doctors write them for completed visits; patients read them in the portal or by asking the assistant. |
 
----
+## How it fits together
 
-## 🛠️ Architecture & Tech Stack
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Next.js 16 App Router UI                        │
-│   Landing Page • Patient Portal • Doctor Schedule • Voice Assistant    │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ Server Actions & API Routes
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Lightweight Repo Facade                         │
-│   src/db/repo.ts ──► UserRepo • DoctorRepo • AppointmentRepo • Billing  │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                 PostgreSQL (Neon Serverless + Local TCP)               │
-│    Advisory Locks (pg_advisory_xact_lock) • Additive Migrations 0000-07│
-└────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    U["Patient or doctor<br/>(browser, mic)"] --> N["Next.js 16 App Router<br/>Server Actions + API routes"]
+    N --> A["AI assistant<br/>Sarvam AI + signed confirmations"]
+    N --> R["Repository layer<br/>advisory-locked transactions"]
+    R --> D[("Neon PostgreSQL<br/>Singapore")]
+    N --> P["Razorpay<br/>checkout + webhooks"]
+    N --> E["Email outbox<br/>Brevo / Resend"]
 ```
 
-| Layer | Technologies & Implementations |
+| Layer | What is used |
 |---|---|
-| **Framework & UI** | Next.js 16.4.3 (Turbopack, App Router), React 19, TypeScript 5, Tailwind CSS 4, Radix UI Primitives, Lucide Icons |
-| **Database & ORM** | Neon Serverless PostgreSQL, Drizzle ORM, dual TCP/WebSocket drivers (`pg` + `@neondatabase/serverless`), 8 migrations (`0000`–`0007`) |
-| **Security & Auth** | PBKDF2 (600,000 iterations), signed HTTP-only JWT cookies (`Secure; HttpOnly; SameSite=Lax`), role-based access control |
-| **Concurrency Guard** | Transaction-scoped advisory locks (`pg_advisory_xact_lock(hashtext(key))`), atomic slot re-validation before commit |
-| **Payments** | Razorpay Gateway (Sandbox), 10-min seat holds, HMAC-SHA256 verification, idempotent webhooks, tiered refunds |
-| **Email & Outbox** | Transactional Outbox Pattern, Brevo API, Resend API, ConsoleChannel fallback, Asia/Kolkata (`Asia/Kolkata`, IST = UTC+05:30) precision |
-| **AI Assistant** | Sarvam AI (`sarvam-105b-conversations`), Multilingual voice & text (EN, HI, MR, Hinglish), Zod tool calling, signed cards |
+| **App** | Next.js 16 (App Router), React 19, TypeScript 5, Tailwind CSS 4, Radix UI |
+| **Data** | Neon serverless PostgreSQL, Drizzle ORM, additive migrations `0000` to `0007` |
+| **Security** | PBKDF2 password hashing, signed HTTP-only session cookies, role-based access, rate limiting, strict production env checks |
+| **AI and voice** | Sarvam AI for chat and speech-to-text, browser speech synthesis, Zod-validated tool calls |
+| **Hosting** | Vercel (functions in Singapore, next to the database), GitHub Actions CI |
 
----
+## 🎬 2-minute demo (what to click)
 
-## 🧪 Automated Testing & Verification Suite
+Open the **[live app](https://medrella-healthcare.vercel.app)** and follow along:
 
-Medrella Healthcare includes 11 dedicated test suites running on every pull request and commit:
+1. **Home** shows the 8 specialists with each one's next open slot.
+2. **Register** as a patient at `/register` (any email, 8+ character password).
+3. Open the **assistant** (round button, bottom right): *"Find a cardiologist"*, then *"Book Dr. Mehta tomorrow around 10:00"*.
+4. A **Confirm card** appears and nothing is booked until you press it. Pay with the Razorpay test details below.
+5. Try *"Kal ke liye slot dikhao"* (Hinglish) or tap the **waveform** for hands-free voice; talk over the reply to interrupt.
+6. Type *"I have chest pain"*: it answers with 112 guidance and never calls the AI.
+7. Ask to **cancel**: the refund amount is shown before you confirm.
+8. As a **doctor** (logins on request): ask *"Any scheduling conflicts this week?"*, shrink a booked session in **Weekly Shifts**, and add a prescription to a completed visit.
 
-```bash
-# Run all 11 domain test suites (580+ checks, 0 network required)
-npm test
+> **Razorpay test mode** (no real money): card `4718 6091 0820 4366`, expiry `12/28`, CVV `123`, or UPI `success@razorpay`.
 
-# Run genuine PostgreSQL concurrency & advisory lock tests
-npm run test:pg
+## 🧭 Main screens
 
-# Run Playwright end-to-end browser user journeys
-npm run test:e2e
-```
+| Route | What it shows |
+|---|---|
+| `/` | Landing page, specialists, next open slots |
+| `/doctors`, `/doctors/[id]` | Directory and the slot picker with the 10-minute seat hold |
+| `/patient/dashboard` | Appointments and the assistant |
+| `/patient/payments`, `/patient/prescriptions` | Receipts and refund status; prescriptions |
+| `/doctor/dashboard`, `/doctor/availability` | Daily queue, Weekly Shifts, leave days |
+| `/queue`, `/reports` | Live waiting queue; visit reports |
+| `/admin/notifications` | Email outbox, failures and one-click retry (admin only) |
+| `/api/health` | Health check with a database ping |
 
-| Suite | Focus Area | Checks |
+## ✅ Tests
+
+**753 automated checks in 11 suites**, plus real-PostgreSQL concurrency tests and Playwright end-to-end tests, all run by GitHub Actions on every push.
+
+| Area | Suites | Checks |
 |---|---|:---:|
-| `test-suite.ts` | Auth, slots, cancellation policies, queue, wave tokens, doctor leave | **115** Pass |
-| `test-payment-hardening.ts` | Razorpay order validation, signature verification, tiered refunds | **51** Pass |
-| `test-notifications.ts` | Transactional outbox, Asia/Kolkata timezone, DLQ retry, PHI redaction | **56** Pass |
-| `test-brevo-welcome.ts` | Multi-channel email delivery, template rendering, failure isolation | **31** Pass |
-| `test-agent.ts` | Assistant tool schemas, role guards, prompt structure, emergency triage | **37** Pass |
-| `test-assistant.ts` | Multilingual 112 routing, token signing, voice hands-free detection | **99** Pass |
-| `test-timezone.ts` | Cross-timezone consistency across UTC, Asia/Kolkata, US/Pacific, Auckland | **4** Pass |
-| `test-scheduling.ts` | Elastic schedule expansion & shrinking, slot preservation | **114** Pass |
-| `test-elastic.ts` | Interactive session shift re-calculation without patient drop | **14** Pass |
-| `test-phase1-hardening.ts` | Connection-pinned migrations, advisory locks, distributed rate limiting | **48** Pass |
-| `test-phase3-lifecycle.ts` | Appointment state machine transitions, burst double-booking prevention | **12** Pass |
-
----
-
-## 🏃 Getting Started Locally
+| Clinic rules, slots, queue, leave | `test-suite` | 115 |
+| Payments, webhooks, refunds | `test-payment-hardening` | 72 |
+| Notifications and email outbox | `test-notifications`, `test-brevo-welcome` | 112 |
+| AI assistant, tools, voice detection | `test-agent`, `test-assistant` | 171 |
+| Scheduling, timezones, elastic sessions | `test-scheduling`, `test-timezone`, `test-elastic` | 223 |
+| Concurrency and appointment lifecycle | `test-phase1-hardening`, `test-phase3-lifecycle` | 60 |
 
 ```bash
-# 1. Clone repository
-git clone https://github.com/atharva1407-sys/Medrella_Healthcare.git
-cd Medrella_Healthcare
-
-# 2. Install dependencies
-npm install
-
-# 3. Configure environment
-cp .env.example .env.local
-
-# 4. Start development server
-npm run dev
-# Open http://localhost:3000
+npm test            # all 11 suites, no network needed
+npm run test:pg     # real PostgreSQL concurrency tests
+npm run test:e2e    # Playwright browser tests
 ```
 
-> [!TIP]
-> **Offline Demo Mode**: To test locally without configuring a database, set `DATABASE_URL="disabled-for-local-test"` and `USE_MOCK_PAYMENTS=true` in `.env.local`. The built-in in-memory repository will automatically seed doctors and appointments.
+## 🚀 Run and deploy
+
+```bash
+npm install
+cp .env.example .env.local
+npm run dev                 # http://localhost:3000
+```
+
+No database is needed to try it locally: set `DATABASE_URL=disabled-for-local-test`, `USE_MOCK_PAYMENTS=true` and `ENABLE_SEED_DATA=true` to run in memory with the 8 specialists.
+
+**Production on Vercel** needs these environment variables: `DATABASE_URL`, `SESSION_SECRET` (32+ characters), `CRON_SECRET` (16+ characters), `APP_URL`, the `RAZORPAY_*` keys, `SARVAM_API_KEY`, and `BREVO_API_KEY` or `RESEND_API_KEY`. The app refuses to run in production with weak or missing secrets. Run any new migration (for example `npm run db:migrate-0007`) on the database before deploying code that reads new tables.
+
+Details: [Environment variables](ENVIRONMENT_VARIABLES.md) · [Deployment guide](PRODUCTION_DEPLOYMENT_GUIDE.md) · [Database migrations](DATABASE_MIGRATION_GUIDE.md) · [Testing guide](TESTING_GUIDE.md) · [Release notes](RELEASE_NOTES.md)
 
 ---
 
-## 📄 License & Attribution
+<div align="center">
 
-Developed by **Atharva Mandlik** for **Medrella Healthcare, Ruby Hall Clinic, Pune, Maharashtra**.
+Built by **Atharva Mandlik** for **Pearl Thoughts**, for Medrella Healthcare, Ruby Hall Clinic, Pune.
+
+</div>
