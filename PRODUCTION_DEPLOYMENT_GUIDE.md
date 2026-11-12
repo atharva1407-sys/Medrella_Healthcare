@@ -90,6 +90,8 @@ npm run build
 
    > **Vercel Hobby limit:** the free Hobby plan only accepts cron jobs that run **at most once per day**. A schedule such as `* * * * *` or `*/10 * * * *` makes the whole deployment fail, and the site keeps serving the last successful build. Booking confirmations and receipts are still sent right after each action; the daily notification run is a backstop for reminders. For more frequent runs, use the Pro plan or call the endpoints from an external scheduler with the header `Authorization: Bearer <CRON_SECRET>`.
 
+5. **Function region.** `vercel.json` sets `"regions": ["sin1"]` (Singapore) so the serverless functions run next to the Neon database (`ap-southeast-1`). Every page makes database round trips; with the default region (Washington, `iad1`) each one crossed the world and screens felt slow. If you ever move the database, change this to the nearest Vercel region (for example `bom1` for Mumbai, `iad1` for AWS us-east).
+
 ### Step 7: Alternative — Deploy with Docker Container
 Build and launch using standard container tooling:
 ```bash
