@@ -1,6 +1,7 @@
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import * as schema from "./schema";
+import { getServerEnv } from "@/lib/env";
 
 // Cache pool globally across Serverless/Edge function invocations
 declare global {
@@ -19,6 +20,7 @@ export function isPostgresConfigured(): boolean {
  * Fails loudly in production if DATABASE_URL is missing on Vercel to prevent silent in-memory data loss.
  */
 export function assertProductionDatabase() {
+  const env = getServerEnv();
   if (process.env.NODE_ENV === "production" && !isPostgresConfigured()) {
     throw new Error(
       "FATAL DATABASE CONFIGURATION: 'DATABASE_URL' environment variable is missing in production. " +
@@ -31,7 +33,12 @@ let pool: Pool | null = null;
 
 if (isPostgresConfigured()) {
   if (!globalThis.__medrellaPool) {
-    globalThis.__medrellaPool = new Pool({ connectionString });
+    globalThis.__medrellaPool = new Pool({
+      connectionString,
+      max: Number(process.env.DB_POOL_MAX || 10),
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    });
   }
   pool = globalThis.__medrellaPool;
 }

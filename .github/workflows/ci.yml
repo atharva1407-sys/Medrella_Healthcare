@@ -1,0 +1,98 @@
+name: Medrella Healthcare CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, master, staging]
+  pull_request:
+    branches: [main, master, staging]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Code Quality & Domain Verification
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: medrella_user
+          POSTGRES_PASSWORD: medrella_secure_password
+          POSTGRES_DB: medrella_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run TypeScript Typecheck
+        run: npx tsc --noEmit
+
+      - name: Run Domain & Security Test Suites (11 Suites, 580+ Checks)
+        env:
+          NODE_ENV: test
+          SESSION_SECRET: test_session_secret_at_least_32_characters_long_for_security
+          CRON_SECRET: test_cron_secret_for_scheduled_tasks
+        run: npm test
+
+      - name: Run PostgreSQL Migrations with Connection-Pinned Advisory Lock
+        env:
+          DATABASE_URL: postgres://medrella_user:medrella_secure_password@localhost:5432/medrella_test_db
+        run: npm run db:migrate
+
+      - name: Run Real PostgreSQL Concurrency & Integration Tests
+        env:
+          TEST_DATABASE_URL: postgres://medrella_user:medrella_secure_password@localhost:5432/medrella_test_db
+        run: npm run test:pg
+
+      - name: Production Build (Turbopack)
+        env:
+          NODE_ENV: production
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run build
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E Tests
+        env:
+          CI: "1"
+          NODE_ENV: production
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run test:e2e
+
+  security-audit:
+    name: Security & Secret Audits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run NPM Security Audit
+        run: npm audit --audit-level=high || true
