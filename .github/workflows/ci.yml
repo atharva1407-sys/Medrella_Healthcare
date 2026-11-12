@@ -54,34 +54,7 @@ jobs:
           NODE_ENV: test
           SESSION_SECRET: test_session_secret_at_least_32_characters_long_for_security
           CRON_SECRET: test_cron_secret_for_scheduled_tasks
-        run: |
-          for test_file in \
-            src/test-suite.ts \
-            src/test-payment-hardening.ts \
-            src/test-notifications.ts \
-            src/test-brevo-welcome.ts \
-            src/test-agent.ts \
-            src/test-assistant.ts \
-            src/test-timezone.ts \
-            src/test-scheduling.ts \
-            src/test-elastic.ts \
-            src/test-phase1-hardening.ts \
-            src/test-phase3-lifecycle.ts
-          do
-            echo "::group::Running $test_file"
-            echo "### Testing $test_file" >> $GITHUB_STEP_SUMMARY
-            if npx tsx "$test_file" > /tmp/test.log 2>&1; then
-              echo "✅ PASS: $test_file" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "❌ FAIL: $test_file" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              cat /tmp/test.log >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              cat /tmp/test.log
-              exit 1
-            fi
-            echo "::endgroup::"
-          done
+        run: npm test
 
       - name: Run PostgreSQL Migrations with Connection-Pinned Advisory Lock
         env:
