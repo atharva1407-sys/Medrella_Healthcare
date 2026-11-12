@@ -1,18 +1,5 @@
 import type { NextConfig } from "next";
 
-// Server initialization environment validation
-if (process.env.NODE_ENV === "production" && process.env.SKIP_ENV_VALIDATION !== "true") {
-  try {
-    const { validateEnv } = require("./src/lib/env");
-    validateEnv();
-  } catch (err: any) {
-    if (process.env.CI || process.env.VERCEL) {
-      console.error(err.message);
-      throw err;
-    }
-  }
-}
-
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   async redirects() {
