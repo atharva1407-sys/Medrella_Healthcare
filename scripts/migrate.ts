@@ -2,9 +2,12 @@ import * as dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
-import { Pool } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-serverless";
-import { migrate } from "drizzle-orm/neon-serverless/migrator";
+import { Pool as NeonPool } from "@neondatabase/serverless";
+import { drizzle as neonDrizzle } from "drizzle-orm/neon-serverless";
+import { migrate as neonMigrate } from "drizzle-orm/neon-serverless/migrator";
+import { Pool as PgPool } from "pg";
+import { drizzle as pgDrizzle } from "drizzle-orm/node-postgres";
+import { migrate as pgMigrate } from "drizzle-orm/node-postgres/migrator";
 import path from "path";
 import { sql } from "drizzle-orm";
 
@@ -18,16 +21,19 @@ async function runMigrations() {
     process.exit(1);
   }
 
+  const isLocal = connectionString.includes("localhost") || connectionString.includes("127.0.0.1");
+
   // Sanitize log: log only hostname, never user or password
   try {
     const parsed = new URL(connectionString);
-    console.log(`🔒 [MIGRATE]: Connecting to PostgreSQL host: ${parsed.hostname}`);
+    console.log(`🔒 [MIGRATE]: Connecting to PostgreSQL host: ${parsed.hostname} (${isLocal ? "node-postgres / TCP" : "neon-serverless / WebSocket"})`);
   } catch {
     console.log("🔒 [MIGRATE]: Connecting to PostgreSQL database...");
   }
 
-  const pool = new Pool({ connectionString });
-  const client = await pool.connect();
+  const pool: any = isLocal ? new PgPool({ connectionString }) : new NeonPool({ connectionString });
+  const client: any = await pool.connect();
+  const drizzle: any = isLocal ? pgDrizzle : neonDrizzle;
   const db = drizzle(client);
 
   let lockAcquired = false;
@@ -41,7 +47,11 @@ async function runMigrations() {
     const migrationsFolder = path.resolve(process.cwd(), "src/db/migrations");
     console.log(`🚀 [MIGRATE]: Applying version-controlled migrations from: ${migrationsFolder}`);
 
-    await migrate(db, { migrationsFolder });
+    if (isLocal) {
+      await pgMigrate(db as any, { migrationsFolder });
+    } else {
+      await neonMigrate(db as any, { migrationsFolder });
+    }
 
     console.log("🎉 [MIGRATE]: All database migrations applied and verified successfully!");
   } catch (err: any) {
