@@ -26,6 +26,7 @@ The production build of Medrella: patients find a doctor, book a slot, pay onlin
 | | |
 |---|---|
 | 🤖 **AI assistant** | Text or hands-free voice. Patients book, reschedule, cancel and pay in chat; doctors get schedule, stats, conflicts and free slots. Real backend actions, signed single-use confirmations, emergency messages routed to 112. A History button keeps past chats on the user's own device. |
+| 🏥 **Patient check-in & queue** | Atomic check-in with duplicate guards, permanent tokens, dynamic position computation (1..N), wait-time estimation, and lifecycle states (BOOKED → CHECKED_IN → IN_CONSULTATION → COMPLETED). |
 | 📅 **Elastic scheduling** | Morning and evening sessions, Stream or Wave capacity, leave days. Stretch or shrink hours even with patients booked. |
 | 🔒 **No double booking** | Transaction-scoped PostgreSQL advisory locks, with the slot rechecked right before commit. |
 | 💳 **Payments** | Razorpay checkout, 10-minute seat holds, signature verification, idempotent webhooks, refunds of 100% / 50% / 0% by notice. |
@@ -47,7 +48,7 @@ flowchart LR
 | Layer | What is used |
 |---|---|
 | **App** | Next.js 16 (App Router), React 19, TypeScript 5, Tailwind CSS 4, Radix UI |
-| **Data** | Neon serverless PostgreSQL, Drizzle ORM, additive migrations `0000` to `0007` |
+| **Data** | Neon serverless PostgreSQL, Drizzle ORM, additive migrations `0000` to `0008` |
 | **Security** | PBKDF2 password hashing, signed HTTP-only session cookies, role-based access, rate limiting, strict production env checks |
 | **AI and voice** | Sarvam AI for chat and speech-to-text, browser speech synthesis, Zod-validated tool calls |
 | **Hosting** | Vercel (functions in Singapore, next to the database), GitHub Actions CI |
@@ -82,11 +83,12 @@ Open the **[live app](https://medrella-healthcare.vercel.app)** and follow along
 
 ## ✅ Tests
 
-**753 automated checks in 11 suites**, plus real-PostgreSQL concurrency tests and Playwright end-to-end tests, all run by GitHub Actions on every push.
+**840 automated checks in 12 suites**, plus real-PostgreSQL concurrency tests and Playwright end-to-end tests, all run by GitHub Actions on every push.
 
 | Area | Suites | Checks |
 |---|---|:---:|
 | Clinic rules, slots, queue, leave | `test-suite` | 115 |
+| Patient check-in & queue management | `test-checkin-queue` | 87 |
 | Payments, webhooks, refunds | `test-payment-hardening` | 72 |
 | Notifications and email outbox | `test-notifications`, `test-brevo-welcome` | 112 |
 | AI assistant, tools, voice detection | `test-agent`, `test-assistant` | 171 |
@@ -94,7 +96,7 @@ Open the **[live app](https://medrella-healthcare.vercel.app)** and follow along
 | Concurrency and appointment lifecycle | `test-phase1-hardening`, `test-phase3-lifecycle` | 60 |
 
 ```bash
-npm test            # all 11 suites, no network needed
+npm test            # all 12 suites, no network needed
 npm run test:pg     # real PostgreSQL concurrency tests
 npm run test:e2e    # Playwright browser tests
 ```
@@ -109,7 +111,7 @@ npm run dev                 # http://localhost:3000
 
 No database is needed to try it locally: set `DATABASE_URL=disabled-for-local-test`, `USE_MOCK_PAYMENTS=true` and `ENABLE_SEED_DATA=true` to run in memory with the 8 specialists.
 
-**Production on Vercel** needs these environment variables: `DATABASE_URL`, `SESSION_SECRET` (32+ characters), `CRON_SECRET` (16+ characters), `APP_URL`, the `RAZORPAY_*` keys, `SARVAM_API_KEY`, and `BREVO_API_KEY` or `RESEND_API_KEY`. The app refuses to run in production with weak or missing secrets. Run any new migration (for example `npm run db:migrate-0007`) on the database before deploying code that reads new tables.
+**Production on Vercel** needs these environment variables: `DATABASE_URL`, `SESSION_SECRET` (32+ characters), `CRON_SECRET` (16+ characters), `APP_URL`, the `RAZORPAY_*` keys, `SARVAM_API_KEY`, and `BREVO_API_KEY` or `RESEND_API_KEY`. The app refuses to run in production with weak or missing secrets. Run any new migration (for example `npm run db:migrate-0008`) on the database before deploying code that reads new tables.
 
 Details: [Environment variables](ENVIRONMENT_VARIABLES.md) · [Deployment guide](PRODUCTION_DEPLOYMENT_GUIDE.md) · [Database migrations](DATABASE_MIGRATION_GUIDE.md) · [Testing guide](TESTING_GUIDE.md) · [Release notes](RELEASE_NOTES.md)
 
