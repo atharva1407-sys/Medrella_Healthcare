@@ -1,5 +1,5 @@
 {
-  "name": "medrella-task-7",
+  "name": "medrella-task-8",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx src/test-suite.ts && tsx src/test-payment-hardening.ts && tsx src/test-notifications.ts && tsx src/test-brevo-welcome.ts && tsx src/test-agent.ts && tsx src/test-assistant.ts && tsx src/test-dev-store.ts && tsx src/test-voice-choice.ts && tsx src/test-chat-history.ts && tsx src/test-timezone.ts && tsx src/test-scheduling.ts && tsx src/test-elastic.ts && tsx src/test-phase1-hardening.ts && tsx src/test-phase3-lifecycle.ts && tsx src/test-checkin-queue.ts",
+    "test": "tsx src/test-suite.ts && tsx src/test-payment-hardening.ts && tsx src/test-notifications.ts && tsx src/test-brevo-welcome.ts && tsx src/test-agent.ts && tsx src/test-assistant.ts && tsx src/test-dev-store.ts && tsx src/test-voice-choice.ts && tsx src/test-chat-history.ts && tsx src/test-timezone.ts && tsx src/test-scheduling.ts && tsx src/test-elastic.ts && tsx src/test-phase1-hardening.ts && tsx src/test-phase3-lifecycle.ts && tsx src/test-checkin-queue.ts && tsx src/test-receptionist-queue.ts",
     "test:pg": "tsx scripts/test-pg-integration.ts",
     "test:e2e": "playwright test",
     "db:migrate": "tsx scripts/migrate.ts",
@@ -37,7 +37,7 @@
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.39.3",
     "lucide-react": "^1.62.0",
-    "next": "16.4.3",
+    "next": "16.4.6",
     "pg": "^8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -55,7 +55,7 @@
     "dotenv": "^18.0.9",
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
-    "eslint-config-next": "16.4.3",
+    "eslint-config-next": "16.4.6",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5"
