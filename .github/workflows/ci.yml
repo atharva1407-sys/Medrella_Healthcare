@@ -49,7 +49,7 @@ jobs:
       - name: Run TypeScript Typecheck
         run: npx tsc --noEmit
 
-      - name: Run Domain & Security Test Suites (16 Suites, 859+ Checks)
+      - name: Run Domain & Security Test Suites (16 Suites, 866+ Checks)
         env:
           NODE_ENV: test
           SESSION_SECRET: test_session_secret_at_least_32_characters_long_for_security
